@@ -5,28 +5,33 @@ g_flag = 0
 a_flag = 0
 function midi.onSysex(midiInput, sysexBlock)
   if msgNumber == 0 then dump = {} end
-  -- 1st message is always a header message and is 40 bytes
-  if sysexBlock:getLength() > 6 and sysexBlock:peek(11) == 1 then msgNumber = 1 end  
-  -- the 2nd message is always a packet message. For a patch dump there are 7 packets. For globals there is only 1
-  for i = 0,6 do 
-    if sysexBlock:getLength() > 6 and sysexBlock:peek(11) == 2 and sysexBlock:peek(12) == i then msgNumber = i+2 end 
-  end
-  -- a global request returns 2 messages: global header, global packet, atrophy header atrophy packet, eof
-  -- skip the 2nd header
---  if msgNumber == 2 and sysexBlock:getLength() > 6 and sysexBlock:peek(11) == 1 and sysexBlock:getLength() == 40 then return end
-
-  if msgNumber == 8 then p_flag = 1 end -- using this since patch parsing from E1 is not working
-
-  if p_flag == 1 and sysexBlock:getLength() == 6 and sysexBlock:peek(2) == 0x7E then msgNumber = 9   
-  -- 9th message of a patch dump is an eof message and is always 6 bytes
-  elseif g_flag == 1 and sysexBlock:getLength() == 6 and sysexBlock:peek(2) == 0x7E then msgNumber = 5  
-  elseif a_flag == 1 and sysexBlock:getLength() == 6 and sysexBlock:peek(2) == 0x7E then msgNumber = 3 end  
-  -- 3rd message of a global or atrophy dump is an eof message and is always 6 bytes
-
-  if msgNumber == 1 and sysexBlock:peek(2) ~= 0x00 and sysexBlock:peek(3) ~= 0x20 and  sysexBlock:peek(4) ~= 0x32 then print("Not Behringer") return end
-  if msgNumber == 1 and sysexBlock:peek(7) ~= 0x3A then print("Not UB-Xa") return end
-
   local length = sysexBlock:getLength()
+  local peek = function(i) return sysexBlock:peek(i) end
+  -- 1st message is always a header message and is 40 bytes
+  if length > 6 and peek(11) == 1 then msgNumber = 1 end
+  -- the 2nd message is always a packet message. For a patch dump there are 7 packets. For globals there is only 1
+  for i = 0, 6 do
+    if length > 6 and peek(11) == 2 and peek(12) == i then
+      msgNumber = i + 2
+    end
+  end
+  -- using this since patch parsing from E1 is not working
+  if msgNumber == 8 then p_flag = 1 end
+  -- EOF detection: 9th message of a patch dump is an eof message and is always 6 bytes
+  if p_flag == 1 and length == 6 and peek(2) == 0x7E then
+    msgNumber = 9
+  elseif g_flag == 1 and length == 6 and peek(2) == 0x7E then
+    msgNumber = 5
+  elseif a_flag == 1 and length == 6 and peek(2) == 0x7E then
+    msgNumber = 3
+  end
+-- validate header only when we've detected a header message
+  if msgNumber == 1 then
+    -- ensure bytes 2..4 match vendor ID: 00 20 32 (Behringer)
+    if not (peek(2) == 0x00 and peek(3) == 0x20 and peek(4) == 0x32) then print("Not Behringer") return end
+    if peek(7) ~= 0x3A then print("Not UB-Xa") return end
+  end
+
   print(
       "sysex (" .. msgNumber .. ") message received: " ..
       "interface=" .. midiInput.interface ..
@@ -37,19 +42,15 @@ function midi.onSysex(midiInput, sysexBlock)
     local bytes = {}
     local endIndex = math.min(startIndex + 15, length)
     for i = startIndex, endIndex do
-        bytes[#bytes + 1] = string.format("%02X", sysexBlock:peek(i))
+        bytes[#bytes + 1] = string.format("%02X", peek(i))
     end
-    print(string.format(
-        "data[%04X]: %s",
-        startIndex - 1,
-        table.concat(bytes, " ")
-    ))
+    print(string.format("data[%04X]: %s", startIndex - 1, table.concat(bytes, " ")))
   end
   -- parse the sysex dump parameters
   -- first, put each message from the patch sysEx dump into the "dump" variable
   local temp = {}
   for i = 1,length do
-    temp[i] = sysexBlock:peek(i)
+    temp[i] = peek(i)
   end
   table.insert(dump,temp)
 
@@ -76,46 +77,12 @@ function midi.onSysex(midiInput, sysexBlock)
         idx = idx + 1
       end
       idx = 1
-      -- 2 byte parameters (multiple 0-255 range parameters by 64 to scale to 0-16383 range of nrpn) 
-      parameterMap.set (deviceId, 3, 0, param2[1]*64) -- Portamento amount
-      parameterMap.set (deviceId, 3, 1, param2[2]*64) -- portamento bend
-      parameterMap.set (deviceId, 3, 2, param2[3]*64) -- osc2 detune
-      parameterMap.set (deviceId, 3, 3, param2[4]*64) -- random voice detune
-      parameterMap.set (deviceId, 3, 128, param2[5]*64) -- patch volume
-      parameterMap.set (deviceId, 3, 256, param2[6]*64) -- LFO retrigger point
-      parameterMap.set (deviceId, 3, 257, param2[7]*64) -- LFO rate
-      parameterMap.set (deviceId, 3, 258, param2[8]*64) -- LFO phase
-      parameterMap.set (deviceId, 3, 259, param2[9]*64) -- CH1 amount
-      parameterMap.set (deviceId, 3, 260, param2[10]*64) -- CH2 amount
-      parameterMap.set (deviceId, 3, 384, param2[11]*64) -- VCF attack
-      parameterMap.set (deviceId, 3, 385, param2[12]*64) -- VCF decay
-      parameterMap.set (deviceId, 3, 386, param2[13]*64) -- VCF sustain
-      parameterMap.set (deviceId, 3, 387, param2[14]*64) -- VCF release
-      parameterMap.set (deviceId, 3, 388, param2[15]*64) -- VCA attack
-      parameterMap.set (deviceId, 3, 389, param2[16]*64) -- VCA decay
-      parameterMap.set (deviceId, 3, 390, param2[17]*64) -- VCA sustain
-      parameterMap.set (deviceId, 3, 391, param2[18]*64) -- VCA release
-      parameterMap.set (deviceId, 3, 392, param2[19]*64) -- Attack time mod 1
-      parameterMap.set (deviceId, 3, 393, param2[20]*64) -- Delay time mod 1
-      parameterMap.set (deviceId, 3, 394, param2[21]*64) -- Attack time mod 2
-      parameterMap.set (deviceId, 3, 395, param2[22]*64) -- Delay time mod 2 
-      parameterMap.set (deviceId, 3, 396, param2[23]*64) -- pedal release time for VCA env
-      parameterMap.set (deviceId, 3, 512, param2[24]*64) -- OSC1 PWM amount
-      parameterMap.set (deviceId, 3, 513, param2[25]*64) -- OSC1 transpose
-      parameterMap.set (deviceId, 3, 514, param2[26]*64) -- OSC2 PWM amount
-      parameterMap.set (deviceId, 3, 515, param2[27]*64) -- OSC2 transpose
-      parameterMap.set (deviceId, 3, 640, param2[28]*64) -- Filter freq
-      parameterMap.set (deviceId, 3, 641, param2[29]*64) -- filter resonance
-      parameterMap.set (deviceId, 3, 642, param2[30]*64) -- filter mod amount
-      parameterMap.set (deviceId, 3, 643, param2[31]*64) -- filter noise
-      parameterMap.set (deviceId, 3, 768, param2[32]*64) -- mod matrix 1 amount
-      parameterMap.set (deviceId, 3, 770, param2[33]*64) -- mod matrix 2 amount
-      parameterMap.set (deviceId, 3, 772, param2[34]*64) -- mod matrix 3 amount
-      parameterMap.set (deviceId, 3, 774, param2[35]*64) -- mod matrix 4 amount
-      parameterMap.set (deviceId, 3, 769, param2[36]*64) -- mod matrix 5 amount
-      parameterMap.set (deviceId, 3, 771, param2[37]*64) -- mod matrix 6 amount
-      parameterMap.set (deviceId, 3, 773, param2[38]*64) -- mod matrix 7 amount
-      parameterMap.set (deviceId, 3, 775, param2[39]*64) -- mod matrix 8 amount
+      local paramList = {0,1,2,3,128,256,257,258,259,260,384,385,386,387,388,389,390,391,392,393,394,395,396,512,513,514,515,640,641,642,643,768,770,772,774,769,771,773,775}
+      for i = 1,39 do
+      -- parse 2 byte parameters (multiple 0-255 range parameters by 64 to scale to 0-16383 range of nrpn)
+      -- see manual for nrpn numbers 
+        parameterMap.set (deviceId, 3, paramList[i], param2[i]*64) 
+      end
       -- 1 byte parameters ---------------------------------------
       parameterMap.set (deviceId, 3, 4, param1[1])    -- unison mode toggle
       parameterMap.set (deviceId, 3, 5, param1[2])    -- poly voice #
@@ -257,3 +224,4 @@ function midi.onSysex(midiInput, sysexBlock)
 
   msgNumber = msgNumber + 1 -- update message number
 end
+
