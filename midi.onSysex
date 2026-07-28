@@ -1,6 +1,8 @@
 local dump = {}
 local msgNumber = 0
-
+p_flag = 0
+g_flag = 0
+a_flag = 0
 function midi.onSysex(midiInput, sysexBlock)
   if msgNumber == 0 then dump = {} end
   -- 1st message is always a header message and is 40 bytes
