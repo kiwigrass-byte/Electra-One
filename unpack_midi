@@ -29,5 +29,3 @@ local function unpack_midi(array)
   end
   return result
 end
-
-return unpack_midi
