@@ -1,0 +1,257 @@
+local dump = {}
+local msgNumber = 0
+
+function midi.onSysex(midiInput, sysexBlock)
+  if msgNumber == 0 then dump = {} end
+  -- 1st message is always a header message and is 40 bytes
+  if sysexBlock:getLength() > 6 and sysexBlock:peek(11) == 1 then msgNumber = 1 end  
+  -- the 2nd message is always a packet message. For a patch dump there are 7 packets. For globals there is only 1
+  for i = 0,6 do 
+    if sysexBlock:getLength() > 6 and sysexBlock:peek(11) == 2 and sysexBlock:peek(12) == i then msgNumber = i+2 end 
+  end
+  -- a global request returns 2 messages: global header, global packet, atrophy header atrophy packet, eof
+  -- skip the 2nd header
+--  if msgNumber == 2 and sysexBlock:getLength() > 6 and sysexBlock:peek(11) == 1 and sysexBlock:getLength() == 40 then return end
+
+  if msgNumber == 8 then p_flag = 1 end -- using this since patch parsing from E1 is not working
+
+  if p_flag == 1 and sysexBlock:getLength() == 6 and sysexBlock:peek(2) == 0x7E then msgNumber = 9   
+  -- 9th message of a patch dump is an eof message and is always 6 bytes
+  elseif g_flag == 1 and sysexBlock:getLength() == 6 and sysexBlock:peek(2) == 0x7E then msgNumber = 5  
+  elseif a_flag == 1 and sysexBlock:getLength() == 6 and sysexBlock:peek(2) == 0x7E then msgNumber = 3 end  
+  -- 3rd message of a global or atrophy dump is an eof message and is always 6 bytes
+
+  if msgNumber == 1 and sysexBlock:peek(2) ~= 0x00 and sysexBlock:peek(3) ~= 0x20 and  sysexBlock:peek(4) ~= 0x32 then print("Not Behringer") return end
+  if msgNumber == 1 and sysexBlock:peek(7) ~= 0x3A then print("Not UB-Xa") return end
+
+  local length = sysexBlock:getLength()
+  print(
+      "sysex (" .. msgNumber .. ") message received: " ..
+      "interface=" .. midiInput.interface ..
+      " length=" .. length
+  )
+  -- Print 16 hexadecimal bytes per line.
+  for startIndex = 1, length, 16 do
+    local bytes = {}
+    local endIndex = math.min(startIndex + 15, length)
+    for i = startIndex, endIndex do
+        bytes[#bytes + 1] = string.format("%02X", sysexBlock:peek(i))
+    end
+    print(string.format(
+        "data[%04X]: %s",
+        startIndex - 1,
+        table.concat(bytes, " ")
+    ))
+  end
+  -- parse the sysex dump parameters
+  -- first, put each message from the patch sysEx dump into the "dump" variable
+  local temp = {}
+  for i = 1,length do
+    temp[i] = sysexBlock:peek(i)
+  end
+  table.insert(dump,temp)
+
+  -- for a patch dump message 9 is the eof, so start parsing parameter values
+  if p_flag == 1 and msgNumber == 9 then
+    local patchName = "" -- initialize patch name
+    local result = parse_sysex(dump)
+    local param2 = {}  -- store 2 byte paramters
+    local param1 = {}  -- store 1 byte parameters
+    local idx = 1
+    if result then
+      patchName = get_patch_name(result.data)
+      print("Patch name: " .. patchName)
+      info.setText(patchName)
+      for i = 1,77,2 do -- loop through the 2-byte patch parameters
+        param2[idx] = get_2byte_parameter(result.data,i)
+--        print("2-byte Parameter: " .. idx .. " value: " ..param2[idx] )
+        idx = idx+1
+      end
+      idx = 1
+      for i = 95,155 do -- loop through the 1-byte parameters.  
+        param1[idx] = get_1byte_parameter(result.data,i)
+        print("1-byte Parameter: " .. idx .. " value: " ..param1[idx] )
+        idx = idx + 1
+      end
+      idx = 1
+      -- 2 byte parameters (multiple 0-255 range parameters by 64 to scale to 0-16383 range of nrpn) 
+      parameterMap.set (deviceId, 3, 0, param2[1]*64) -- Portamento amount
+      parameterMap.set (deviceId, 3, 1, param2[2]*64) -- portamento bend
+      parameterMap.set (deviceId, 3, 2, param2[3]*64) -- osc2 detune
+      parameterMap.set (deviceId, 3, 3, param2[4]*64) -- random voice detune
+      parameterMap.set (deviceId, 3, 128, param2[5]*64) -- patch volume
+      parameterMap.set (deviceId, 3, 256, param2[6]*64) -- LFO retrigger point
+      parameterMap.set (deviceId, 3, 257, param2[7]*64) -- LFO rate
+      parameterMap.set (deviceId, 3, 258, param2[8]*64) -- LFO phase
+      parameterMap.set (deviceId, 3, 259, param2[9]*64) -- CH1 amount
+      parameterMap.set (deviceId, 3, 260, param2[10]*64) -- CH2 amount
+      parameterMap.set (deviceId, 3, 384, param2[11]*64) -- VCF attack
+      parameterMap.set (deviceId, 3, 385, param2[12]*64) -- VCF decay
+      parameterMap.set (deviceId, 3, 386, param2[13]*64) -- VCF sustain
+      parameterMap.set (deviceId, 3, 387, param2[14]*64) -- VCF release
+      parameterMap.set (deviceId, 3, 388, param2[15]*64) -- VCA attack
+      parameterMap.set (deviceId, 3, 389, param2[16]*64) -- VCA decay
+      parameterMap.set (deviceId, 3, 390, param2[17]*64) -- VCA sustain
+      parameterMap.set (deviceId, 3, 391, param2[18]*64) -- VCA release
+      parameterMap.set (deviceId, 3, 392, param2[19]*64) -- Attack time mod 1
+      parameterMap.set (deviceId, 3, 393, param2[20]*64) -- Delay time mod 1
+      parameterMap.set (deviceId, 3, 394, param2[21]*64) -- Attack time mod 2
+      parameterMap.set (deviceId, 3, 395, param2[22]*64) -- Delay time mod 2 
+      parameterMap.set (deviceId, 3, 396, param2[23]*64) -- pedal release time for VCA env
+      parameterMap.set (deviceId, 3, 512, param2[24]*64) -- OSC1 PWM amount
+      parameterMap.set (deviceId, 3, 513, param2[25]*64) -- OSC1 transpose
+      parameterMap.set (deviceId, 3, 514, param2[26]*64) -- OSC2 PWM amount
+      parameterMap.set (deviceId, 3, 515, param2[27]*64) -- OSC2 transpose
+      parameterMap.set (deviceId, 3, 640, param2[28]*64) -- Filter freq
+      parameterMap.set (deviceId, 3, 641, param2[29]*64) -- filter resonance
+      parameterMap.set (deviceId, 3, 642, param2[30]*64) -- filter mod amount
+      parameterMap.set (deviceId, 3, 643, param2[31]*64) -- filter noise
+      parameterMap.set (deviceId, 3, 768, param2[32]*64) -- mod matrix 1 amount
+      parameterMap.set (deviceId, 3, 770, param2[33]*64) -- mod matrix 2 amount
+      parameterMap.set (deviceId, 3, 772, param2[34]*64) -- mod matrix 3 amount
+      parameterMap.set (deviceId, 3, 774, param2[35]*64) -- mod matrix 4 amount
+      parameterMap.set (deviceId, 3, 769, param2[36]*64) -- mod matrix 5 amount
+      parameterMap.set (deviceId, 3, 771, param2[37]*64) -- mod matrix 6 amount
+      parameterMap.set (deviceId, 3, 773, param2[38]*64) -- mod matrix 7 amount
+      parameterMap.set (deviceId, 3, 775, param2[39]*64) -- mod matrix 8 amount
+      -- 1 byte parameters ---------------------------------------
+      parameterMap.set (deviceId, 3, 4, param1[1])    -- unison mode toggle
+      parameterMap.set (deviceId, 3, 5, param1[2])    -- poly voice #
+      parameterMap.set (deviceId, 3, 6, param1[3])    -- unison voice #
+      -- 4 ??
+      parameterMap.set (deviceId, 3, 11, param1[5])   -- portamento spread
+      parameterMap.set (deviceId, 3, 12, param1[6])   -- portamento range
+      parameterset({37,38,39,40},param1[7])          -- LFO modulation
+      parameterMap.set (deviceId, 3, 262, param1[8])  -- LFO shape
+      parameterset({50,51,27},param1[9])             -- CH1 LFO destinations
+      parameterset({30,31},param1[10])               -- CH1 quant/invert
+      parameterset({33,35,44},param1[11])            -- CH2 LFO destinations
+      parameterset({49,46},param1[12])               -- CH2 quant/invert
+      parameterset({136,137,138,139,140},param1[13])  -- Filter env mods
+      parameterset({141,142,143,144,145},param1[14])  -- VCA env mods
+      parameterset({2,9},param1[15])                  -- OSC2 modes
+      parameterMap.set (deviceId, 3, 533, param1[16])  -- Osc FEnv range
+      parameterset({3,154,155},param1[17])            -- Osc1 state
+      parameterMap.set (deviceId, 3, 518, param1[18])  -- Osc1 shapes
+      -- 19?
+      parameterMap.set (deviceId, 3, 519, param1[20])  -- Osc2 level
+      parameterMap.set (deviceId, 3, 520, param1[21])  -- Osc2 shapes
+      parameterMap.set (deviceId, 3, 536, param1[22])  -- Osc2 quant interval for transpose
+      parameterMap.set (deviceId, 3, 525, param1[23])  -- Osc1 pitch mod depth
+      parameterMap.set (deviceId, 3, 534, param1[24])  -- Osc2 pitch mod depth
+      parameterMap.set (deviceId, 3, 526, param1[25])  -- Osc1 PWM depth
+      parameterMap.set (deviceId, 3, 537, param1[26])  -- Osc2 PWM depth
+      parameterset({76,89},param1[27])                -- Filter key track and mode
+      parameterMap.set (deviceId, 3, 664, param1[28])  -- Range of filter tracking
+      parameterMap.set (deviceId, 3, 650, param1[29])  -- Range of filter envelope 
+      parameterMap.set (deviceId, 3, 647, param1[30])  -- Range of filter frequency
+      parameterMap.set (deviceId, 3, 653, param1[31])  -- Range of filter LFO
+      parameterMap.set (deviceId, 3, 657, param1[32])  -- Range of filter pedal
+      parameterMap.set (deviceId, 3, 776, param1[33])  -- mod source 1
+      parameterMap.set (deviceId, 3, 777, param1[34])  -- mod dest 1
+      parameterMap.set (deviceId, 3, 780, param1[35])  -- mod source 2
+      parameterMap.set (deviceId, 3, 781, param1[36])  -- mod dest 2
+      parameterMap.set (deviceId, 3, 784, param1[37])  -- mod source 3
+      parameterMap.set (deviceId, 3, 785, param1[38])  -- mod dest 3
+      parameterMap.set (deviceId, 3, 788, param1[39])  -- mod source 4
+      parameterMap.set (deviceId, 3, 789, param1[40])  -- mod dest 4
+      parameterMap.set (deviceId, 3, 778, param1[41])  -- mod source 5
+      parameterMap.set (deviceId, 3, 779, param1[42])  -- mod dest 5
+      parameterMap.set (deviceId, 3, 782, param1[43])  -- mod source 6
+      parameterMap.set (deviceId, 3, 783, param1[44])  -- mod dest 6
+      parameterMap.set (deviceId, 3, 786, param1[45])  -- mod source 7
+      parameterMap.set (deviceId, 3, 787, param1[46])  -- mod dest 7
+      parameterMap.set (deviceId, 3, 790, param1[47])  -- mod source 8
+      parameterMap.set (deviceId, 3, 791, param1[48])  -- mod dest 8
+      parameterMap.set (upperDevice:getId(), 3, 1024, param1[49])  -- ARP enable
+      parameterMap.set (upperDevice:getId(), 3, 1025, param1[50])  -- ARP mode
+      parameterMap.set (upperDevice:getId(), 3, 1026, param1[51])  -- ARP hold
+      parameterMap.set (upperDevice:getId(), 3, 1027, param1[52])  -- ARP time
+      parameterMap.set (upperDevice:getId(), 3, 1028, param1[53])  -- ARP gate length
+      parameterMap.set (upperDevice:getId(), 3, 1029, param1[54])  -- ARP sync
+      parameterMap.set (upperDevice:getId(), 3, 1030, param1[55])  -- ARP octave range
+      -- 56,57 RFU
+      parameterMap.set (deviceId, 3, 913, param1[58])  -- Atrophy preference
+--      parameterMap.set (deviceId, 3,1152, param1[59])  -- Transpose keyboard notes
+      -- 60 RFU
+      parameterMap.set (deviceId, 3, 138, param1[61])  -- Performance LFO limit
+
+    else
+      print("Could not read data") return
+    end
+    p_flag = 0
+    dump = {}
+    msgNumber = 0
+  end
+  if a_flag == 1 and msgNumber == 3 then  -- for atrophy settings the eof is message 3
+    print("current atrophy length: "..length)
+    local result = parse_sysex(dump)
+    local paramA = {}  -- store 1 byte parameters
+    local idx = 1
+    if result then
+      for i = 1,33,1 do -- loop through the atrophy parameters
+        paramA[idx] = get_1byte_parameter(result.data,i)
+        print("1-byte atrophy parameter: " .. idx .. " value: " ..paramA[idx] )
+        idx = idx+1
+      end
+      idx = 1
+      parameterMap.set (deviceId, 3, 138, paramA[1]) -- max speed of main mod LFO
+      parameterMap.set (deviceId, 3, 267, paramA[2]) -- max speed of performance LFO
+      parameterset({52,53},paramA[3])               -- OB8 quirks
+      parameterMap.set (deviceId, 3, 521, paramA[4]) -- Osc1 PW left trim
+      parameterMap.set (deviceId, 3, 522, paramA[5]) -- Osc1 PW right trim
+      parameterMap.set (deviceId, 3, 523, paramA[6]) -- Osc2 PW left trim
+      parameterMap.set (deviceId, 3, 524, paramA[7]) -- Osc2 PW right trim
+      parameterMap.set (deviceId, 3, 527, paramA[8]) -- PWM offset
+      parameterMap.set (deviceId, 3, 528, paramA[9]) -- osc drift
+      parameterMap.set (deviceId, 3, 529, paramA[10]) -- osc vol/oct error
+      parameterMap.set (deviceId, 3, 530, paramA[11]) -- osc drift speed
+      parameterMap.set (deviceId, 3, 531, paramA[12]) -- osc vol/oct chaos WRONG!!!
+      parameterMap.set (deviceId, 3, 532, paramA[13]) -- osc initial freq
+      parameterMap.set (deviceId, 3, 645, paramA[14]) -- 2-pole resonance trim
+      parameterMap.set (deviceId, 3, 646, paramA[15]) -- 4-pole resonance trim
+      parameterMap.set (deviceId, 3, 647, paramA[16]) -- filter freq range amount ??
+      parameterMap.set (deviceId, 3, 648, paramA[17]) -- 2-pole floor
+      parameterMap.set (deviceId, 3, 649, paramA[18]) -- 4-pole floor
+
+      parameterMap.set (deviceId, 3, 660, paramA[28]) -- Filter initial frequency
+
+    else
+      print("Could not read data") return
+    end
+    a_flag = 0
+    dump = {}
+    msgNumber = 0
+  end
+  if g_flag == 1 and msgNumber == 5 then  -- for global settings the eof is message 5
+    print("current global length: "..length)
+    dump[4][12] = 1  -- set the packet number for the atrophy packet to 1 so there are not two #0 packets 
+--    print("rows of dump: "..#dump)
+    table.remove(dump, 3) -- remove the 3rd message row which is the atrophy header message
+--    print("rows of new dump: "..#dump)
+    print("header: " .. dump[1][11] .. " "..dump[1][12].. " packet 1: "..dump[2][11] .. " "..dump[2][12].. " packet 2: "..dump[3][11] .. " "..dump[3][12])
+    local result = parse_sysex(dump)
+    local paramG = {}  -- store 1 byte parameters
+    local idx = 1
+    if result then
+      for i = 1,56,1 do -- loop through the global parameters
+        paramG[idx] = get_1byte_parameter(result.data,i)
+        print("1-byte global parameter: " .. idx .. " value: " ..paramG[idx] )
+        idx = idx+1
+      end
+      idx = 1
+      -- global parameters  
+      parameterMap.set (deviceId, 3, 9, paramG[2])    -- unison note priority
+      parameterMap.set (deviceId, 3, 10, paramG[3])   -- chord mode note priority
+      parameterMap.set (deviceId, 3, 136, paramG[4])  -- lower pitch sens
+      parameterMap.set (deviceId, 3, 137, paramG[5])  -- upper pitch sens
+    else
+      print("Could not read data") return
+    end
+    g_flag = 0
+    dump = {}
+    msgNumber = 0
+  end
+
+  msgNumber = msgNumber + 1 -- update message number
+end
