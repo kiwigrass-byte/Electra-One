@@ -1,0 +1,20 @@
+function getPatch(valueObject, value)
+  if value == 0 then return end
+  local bank = parameterMap.get(deviceId, PT_VIRTUAL, 10008)
+  local number = math.floor(parameterMap.get(deviceId, PT_VIRTUAL, 10009))/100 
+  local digits = {} -- convert patch number to 3 digits
+  -- Loop through each individual digits
+  for digit in string.gmatch(tostring(number), "%d") do
+    -- tonumber() converts it back to a numeric value
+    table.insert(digits, tonumber(digit)) 
+  end
+  local pNum = {}
+  for i = 1,3 do
+    if digits[i] == nil then pNum[i] = 48 -- handles patch 000 (48 is ASCII 0)
+    else pNum[i] = string.byte(digits[i]) -- convert each digit to ascii decimal
+    end
+  end
+  local message = {0x00, 0x20, 0x32, 0x00, 0x01, 0x21, 0x7F, 0x74, 0x07, 0x03, 0x00, 0x42, 0x49, 0x4E, 0x20, 0x50, 0x61, 0x74, 0x63, 0x68, 0x58, 0x20, bank, pNum[1], pNum[2], pNum[3], 0x20, 0x20, 0x20, 0x20, 0x20}
+  midi.sendSysex (currentPort, message)
+--  p_flag = 1 -- don't use until patch request is working
+end
