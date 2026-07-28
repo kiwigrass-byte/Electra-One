@@ -1,45 +1,67 @@
 function parse_sysex(messages)
+  local string_char = string.char
+  local table_concat = table.concat
+  local unpack_midi_local = unpack_midi -- keep the external function lookup local
   local header = nil
-  for _, msg in ipairs(messages) do
-    -- HEADER
+  for mi = 1, #messages do
+    local msg = messages[mi]
+    if not msg then break end
+    -- HEADER (marker value in msg[11] == 1)
     if msg[11] == 1 then
       local idx = 13
-      local type = string.char(msg[idx], msg[idx+1], msg[idx+2], msg[idx+3])
+      -- safe access to the four type bytes
+      local t1, t2, t3, t4 = msg[idx], msg[idx+1], msg[idx+2], msg[idx+3]
+      local typ = string_char(t1 or 0, t2 or 0, t3 or 0, t4 or 0)
       idx = idx + 4
-      local length = (msg[idx] & 0x7F) | 
-                    ((msg[idx+1] & 0x7F) << 7) | 
-                    ((msg[idx+2] & 0x7F) << 14) | 
-                    ((msg[idx+3] & 0x7F) << 21)
+      -- safe 7-bit little-endian length unpack
+      local b1 = msg[idx] or 0
+      local b2 = msg[idx+1] or 0
+      local b3 = msg[idx+2] or 0
+      local b4 = msg[idx+3] or 0
+      local length = (b1 & 0x7F) | ((b2 & 0x7F) << 7) | ((b3 & 0x7F) << 14) | ((b4 & 0x7F) << 21)
       idx = idx + 4
-      local name = ""
+      -- read 16-byte name efficiently
+      local name_parts = {}
       for i = 1, 16 do
-        name = name .. string.char(msg[idx])
+        name_parts[i] = string_char(msg[idx] or 0)
         idx = idx + 1
       end
---      print(name)
-      -- Initialize data table with 0s
+      local name = table_concat(name_parts)
+      -- initialize data array with zeros (1..length)
       local data_array = {}
       for i = 1, length do data_array[i] = 0 end
-      header = {name = name, length = length, type = type, data = data_array}
-    -- DATA PACKET
+      header = { name = name, length = length, type = typ, data = data_array }
+    -- DATA PACKET (marker value in msg[11] == 2)
     elseif msg[11] == 2 and header then
-      local packet_num = msg[12]
-      local packet_len = msg[13]
-      local start_idx = 14
-      local end_idx = start_idx + packet_len
-      -- Insert packet data into the header data array (1-based index)
-      local target_idx = (packet_num * 128) + 1
-      for i = start_idx, end_idx do
-        if target_idx <= #header.data then header.data[target_idx] = msg[i] end
-        target_idx = target_idx + 1
+      local packet_num = msg[12] or 0
+      local packet_len = msg[13] or 0
+      if packet_len > 0 then
+        local start_idx = 14
+        local end_idx = start_idx + packet_len - 1 -- corrected off-by-one
+        local target_idx = (packet_num * 128) + 1
+        -- copy available bytes into header.data, but don't write past header.length
+        for i = start_idx, end_idx do
+          local byte = msg[i]
+          if not byte then break end
+          if target_idx <= header.length then
+            header.data[target_idx] = byte
+          else
+            -- if packet writes past expected length, stop writing
+            break
+          end
+          target_idx = target_idx + 1
+        end
       end
-    -- END
+    -- END (original code used msg[4] == 0x7B as end marker)
     elseif msg[4] == 0x7B and header then
-      header.data = unpack_midi(header.data)
-      -- Truncate data to exactly 'length'
-      local trimmed_data = {}
-      for i = 1, header.length do trimmed_data[i] = header.data[i] end
-      header.data = trimmed_data
+      -- call unpack_midi and then ensure table is exactly header.length long
+      header.data = unpack_midi_local(header.data)
+      if #header.data > header.length then
+        -- trim extra elements in-place to avoid allocating a new table
+        for i = header.length + 1, #header.data do
+          header.data[i] = nil
+        end
+      end
       return header
     end
   end
