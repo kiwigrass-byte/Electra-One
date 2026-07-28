@@ -1,0 +1,47 @@
+function parse_sysex(messages)
+  local header = nil
+  for _, msg in ipairs(messages) do
+    -- HEADER
+    if msg[11] == 1 then
+      local idx = 13
+      local type = string.char(msg[idx], msg[idx+1], msg[idx+2], msg[idx+3])
+      idx = idx + 4
+      local length = (msg[idx] & 0x7F) | 
+                    ((msg[idx+1] & 0x7F) << 7) | 
+                    ((msg[idx+2] & 0x7F) << 14) | 
+                    ((msg[idx+3] & 0x7F) << 21)
+      idx = idx + 4
+      local name = ""
+      for i = 1, 16 do
+        name = name .. string.char(msg[idx])
+        idx = idx + 1
+      end
+--      print(name)
+      -- Initialize data table with 0s
+      local data_array = {}
+      for i = 1, length do data_array[i] = 0 end
+      header = {name = name, length = length, type = type, data = data_array}
+    -- DATA PACKET
+    elseif msg[11] == 2 and header then
+      local packet_num = msg[12]
+      local packet_len = msg[13]
+      local start_idx = 14
+      local end_idx = start_idx + packet_len
+      -- Insert packet data into the header data array (1-based index)
+      local target_idx = (packet_num * 128) + 1
+      for i = start_idx, end_idx do
+        if target_idx <= #header.data then header.data[target_idx] = msg[i] end
+        target_idx = target_idx + 1
+      end
+    -- END
+    elseif msg[4] == 0x7B and header then
+      header.data = unpack_midi(header.data)
+      -- Truncate data to exactly 'length'
+      local trimmed_data = {}
+      for i = 1, header.length do trimmed_data[i] = header.data[i] end
+      header.data = trimmed_data
+      return header
+    end
+  end
+  return nil
+end
