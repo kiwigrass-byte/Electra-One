@@ -1,17 +1,43 @@
-function get_patch_name(data)
-  local patchNameA = 79 
-  local name = {}
-  for i = patchNameA, patchNameA + 15, 2 do
-    -- data[i] is the first byte, data[i+1] is the second byte
-    local b1 = data[i]
-    local b2 = data[i+1]
-     -- Process the first character of the pair
-    local char1 = ((b1 & 0x80) >> 7) + (b2 << 1)
-    table.insert(name, string.char(char1))
-    -- Process the second character of the pair
-    local char2 = b1 & 0x7F
-    table.insert(name, string.char(char2))
+-- Reconstructs a 16-character patch name stored as pairs of bytes.
+-- Assumes "data" is an array-like table of byte values (1..255) and that
+-- the packed name starts at index 79 (patchNameA).
+local utf8 = require("utf8")
+local function get_patch_name(data)
+  if type(data) ~= "table" then
+    error("get_patch_name: expected table of bytes", 2)
   end
-  -- Combine the character array into a single string
-  return table.concat(name)
+  local patchNameA = 79
+  local name_chars = {}
+  -- iterate over 8 pairs (16 characters)
+  for i = patchNameA, patchNameA + 15, 2 do
+    local b1 = data[i]
+    local b2 = data[i + 1]
+    -- stop if insufficient data
+    if not b1 or not b2 then break end
+    if type(b1) ~= "number" or type(b2) ~= "number" then
+      error(("get_patch_name: non-number byte at index %d or %d"):format(i, i+1), 2)
+    end
+    -- Mask b2 to 7 bits, then reconstruct the first character:
+    -- char1: bits = (b2[6:0] << 1) | (b1[7] >> 7)  -> fits in 0..255
+    local char1 = (((b2 & 0x7F) << 1) | ((b1 & 0x80) >> 7)) & 0xFF
+    -- char2: lower 7 bits of b1
+    local char2 = b1 & 0x7F
+    -- Convert to characters. Prefer printable ASCII, otherwise use utf8.char
+    local function to_display_char(c)
+      if c >= 32 and c <= 126 then -- printable ASCII
+        return string.char(c)
+      elseif c == 0 then
+        return "" -- skip NULs
+      else
+        -- use utf8.char for extended code points (safe in Lua 5.3)
+        return utf8.char(c)
+      end
+    end
+    table.insert(name_chars, to_display_char(char1))
+    table.insert(name_chars, to_display_char(char2))
+  end
+  -- join and trim trailing NULs/whitespace
+  local name = table.concat(name_chars)
+  name = name:gsub("%z+$", ""):gsub("%s+$", "")
+  return name
 end
