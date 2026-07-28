@@ -1,0 +1,17 @@
+function get_patch_name(data)
+  local patchNameA = 79 
+  local name = {}
+  for i = patchNameA, patchNameA + 15, 2 do
+    -- data[i] is the first byte, data[i+1] is the second byte
+    local b1 = data[i]
+    local b2 = data[i+1]
+     -- Process the first character of the pair
+    local char1 = ((b1 & 0x80) >> 7) + (b2 << 1)
+    table.insert(name, string.char(char1))
+    -- Process the second character of the pair
+    local char2 = b1 & 0x7F
+    table.insert(name, string.char(char2))
+  end
+  -- Combine the character array into a single string
+  return table.concat(name)
+end
