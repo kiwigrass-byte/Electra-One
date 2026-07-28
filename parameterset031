@@ -1,4 +1,4 @@
-function parameterset031(params, value)
+function parameterset(params, value)
   local x = #params
   -- coerce to integer and keep only the lowest x5 bits (0..2^x-1)
   local v = math.floor(tonumber(value) or 0) & (2^x - 1)
