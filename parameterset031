@@ -1,119 +1,23 @@
-function parameterset031(p1,p2,p3,p4,p5,value)
-  parameterMap.set (deviceId, PT_VIRTUAL, p1, 0 )
-  parameterMap.set (deviceId, PT_VIRTUAL, p2, 0 )
-  parameterMap.set (deviceId, PT_VIRTUAL, p3, 0 )
-  parameterMap.set (deviceId, PT_VIRTUAL, p4, 0 )
-  parameterMap.set (deviceId, PT_VIRTUAL, p4, 0 )
-  if value == 1 then
-    parameterMap.set (deviceId, PT_VIRTUAL, p1,1)
-  elseif value == 2 then
-    parameterMap.set (deviceId, PT_VIRTUAL, p2,1)
-  elseif value == 3 then
-    parameterMap.set (deviceId, PT_VIRTUAL, p1,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p2,1)
-  elseif value == 4 then
-    parameterMap.set (deviceId, PT_VIRTUAL, p3,1)
-  elseif value == 5 then
-    parameterMap.set (deviceId, PT_VIRTUAL, p1,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p3,1)
-  elseif value == 6 then
-    parameterMap.set (deviceId, PT_VIRTUAL, p2,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p3,1)
-  elseif value == 7 then
-    parameterMap.set (deviceId, PT_VIRTUAL, p1,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p2,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p3,1)
-  elseif value == 8 then
-    parameterMap.set (deviceId, PT_VIRTUAL, p4,1)
-  elseif value == 9 then
-    parameterMap.set (deviceId, PT_VIRTUAL, p1,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p4,1)
-  elseif value == 10 then
-    parameterMap.set (deviceId, PT_VIRTUAL, p2,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p4,1)
-  elseif value == 11 then
-    parameterMap.set (deviceId, PT_VIRTUAL, p1,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p2,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p4,1)
-  elseif value == 12 then
-    parameterMap.set (deviceId, PT_VIRTUAL, p2,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p4,1)
-  elseif value == 13 then
-    parameterMap.set (deviceId, PT_VIRTUAL, p1,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p3,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p4,1)
-  elseif value == 14 then
-    parameterMap.set (deviceId, PT_VIRTUAL, p2,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p3,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p4,1)
-  elseif value == 15 then
-    parameterMap.set (deviceId, PT_VIRTUAL, p1,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p2,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p3,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p4,1)
-  elseif value == 16 then
-    parameterMap.set (deviceId, PT_VIRTUAL, p5,1)
-  elseif value == 17 then
-    parameterMap.set (deviceId, PT_VIRTUAL, p1,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p5,1)
-  elseif value == 18 then
-    parameterMap.set (deviceId, PT_VIRTUAL, p2,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p5,1)
-  elseif value == 19 then
-    parameterMap.set (deviceId, PT_VIRTUAL, p1,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p2,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p5,1)
-  elseif value == 20 then
-    parameterMap.set (deviceId, PT_VIRTUAL, p3,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p5,1)
-  elseif value == 21 then
-    parameterMap.set (deviceId, PT_VIRTUAL, p1,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p3,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p5,1)
-  elseif value == 22 then
-    parameterMap.set (deviceId, PT_VIRTUAL, p2,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p3,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p5,1)
-  elseif value == 23 then
-    parameterMap.set (deviceId, PT_VIRTUAL, p1,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p2,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p3,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p5,1)
-  elseif value == 24 then
-    parameterMap.set (deviceId, PT_VIRTUAL, p4,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p5,1)
-  elseif value == 25 then
-    parameterMap.set (deviceId, PT_VIRTUAL, p1,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p4,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p5,1)
-  elseif value == 26 then
-    parameterMap.set (deviceId, PT_VIRTUAL, p2,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p4,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p5,1)
-  elseif value == 27 then
-    parameterMap.set (deviceId, PT_VIRTUAL, p1,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p2,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p4,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p5,1)
-  elseif value == 28 then
-    parameterMap.set (deviceId, PT_VIRTUAL, p3,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p4,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p5,1)
-  elseif value == 29 then
-    parameterMap.set (deviceId, PT_VIRTUAL, p1,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p3,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p4,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p5,1)
-  elseif value == 30 then
-    parameterMap.set (deviceId, PT_VIRTUAL, p2,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p3,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p4,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p5,1)
-  elseif value == 31 then
-    parameterMap.set (deviceId, PT_VIRTUAL, p1,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p2,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p3,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p4,1)
-    parameterMap.set (deviceId, PT_VIRTUAL, p5,1)
+function parameterset031(p1, p2, p3, p4, p5, value)
+  -- coerce to integer and keep only the lowest 5 bits (0..31)
+  local v = math.floor(tonumber(value) or 0) & 31
+
+  local params = { p1, p2, p3, p4, p5 }
+  local set = parameterMap.set
+  local dev = deviceId
+  local PT = PT_VIRTUAL
+
+  -- reset all parameters once
+  for _, p in ipairs(params) do
+    if p ~= nil then set(dev, PT, p, 0) end
+  end
+
+  if v == 0 then return end
+
+  -- set parameters according to bits of v (LSB -> p1)
+  for i, p in ipairs(params) do
+    if p ~= nil and ((v >> (i - 1)) & 1) ~= 0 then
+      set(dev, PT, p, 1)
+    end
   end
 end
