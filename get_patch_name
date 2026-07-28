@@ -1,7 +1,38 @@
 -- Reconstructs a 16-character patch name stored as pairs of bytes.
--- Assumes "data" is an array-like table of byte values (1..255) and that
+-- Assumes "data" is an array-like table of byte values (0..255) and that
 -- the packed name starts at index 79 (patchNameA).
-local utf8 = require("utf8")
+-- This version avoids requiring the utf8 library by providing a small
+-- UTF-8 encoder for codepoints > 127.
+
+local function codepoint_to_utf8(cp)
+  -- cp should be a non-negative integer
+  if not cp or cp <= 0 then return "" end
+  if cp <= 0x7F then
+    return string.char(cp)
+  elseif cp <= 0x7FF then
+    -- 2-byte sequence
+    local b1 = 0xC0 + ((cp >> 6) & 0x1F)
+    local b2 = 0x80 + (cp & 0x3F)
+    return string.char(b1, b2)
+  elseif cp <= 0xFFFF then
+    -- 3-byte sequence
+    local b1 = 0xE0 + ((cp >> 12) & 0x0F)
+    local b2 = 0x80 + ((cp >> 6) & 0x3F)
+    local b3 = 0x80 + (cp & 0x3F)
+    return string.char(b1, b2, b3)
+  elseif cp <= 0x10FFFF then
+    -- 4-byte sequence
+    local b1 = 0xF0 + ((cp >> 18) & 0x07)
+    local b2 = 0x80 + ((cp >> 12) & 0x3F)
+    local b3 = 0x80 + ((cp >> 6) & 0x3F)
+    local b4 = 0x80 + (cp & 0x3F)
+    return string.char(b1, b2, b3, b4)
+  else
+    -- invalid codepoint, use replacement character U+FFFD
+    return "\239\191\189"
+  end
+end
+
 local function get_patch_name(data)
   if type(data) ~= "table" then
     error("get_patch_name: expected table of bytes", 2)
@@ -22,19 +53,19 @@ local function get_patch_name(data)
     local char1 = (((b2 & 0x7F) << 1) | ((b1 & 0x80) >> 7)) & 0xFF
     -- char2: lower 7 bits of b1
     local char2 = b1 & 0x7F
-    -- Convert to characters. Prefer printable ASCII, otherwise use utf8.char
+    -- Convert to characters. Prefer printable ASCII, otherwise encode as UTF-8
     local function to_display_char(c)
-      if c >= 32 and c <= 126 then -- printable ASCII
-        return string.char(c)
-      elseif c == 0 then
+      if c == 0 then
         return "" -- skip NULs
+      elseif c >= 32 and c <= 126 then -- printable ASCII
+        return string.char(c)
       else
-        -- use utf8.char for extended code points (safe in Lua 5.3)
-        return utf8.char(c)
+        -- encode as UTF-8 without depending on external utf8 module
+        return codepoint_to_utf8(c)
       end
     end
-    table.insert(name_chars, to_display_char(char1))
-    table.insert(name_chars, to_display_char(char2))
+    name_chars[#name_chars+1] = to_display_char(char1)
+    name_chars[#name_chars+1] = to_display_char(char2)
   end
   -- join and trim trailing NULs/whitespace
   local name = table.concat(name_chars)
