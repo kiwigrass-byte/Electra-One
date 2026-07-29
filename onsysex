@@ -1,0 +1,62 @@
+function midi.onSysex(midiInput, sysexBlock)
+  if msgNumber == 0 then dump = {} end
+  local length = sysexBlock:getLength()
+  local peek = function(i) return sysexBlock:peek(i) end
+  -- 1st message is always a header message and is 40 bytes
+  if length > 6 and peek(11) == 1 then msgNumber = 1 end
+  -- a upper patch dump has the words "Upper Patch" in positions 21-32 of the header
+--  if msgNumber == 1 and peek(21) == 55 then g_flag = false p_flag = true a_flag = false end
+  -- a global settings dump has the word "Global" in positions 21-26 of the header
+--  if msgNumber == 1 and peek(21) == 47 then g_flag = true p_flag = false a_flag = false end
+  -- an atrophy settings dump has the word "AtrophyX" in positions 21-29 of the header
+--  if msgNumber == 1 and peek(21) == 41 then g_flag = false p_flag = false a_flag = true end
+
+  -- The 2nd message is always a packet message. For a patch dump there are 7 packets and then the eof. 
+  -- For atrophy settings there is the atrophy header, 1 packet and then the eof
+  -- For global settings it seems that the UB-Xa sends a global header the global settings dump packet and 
+  -- then the atrophy header and packet dump followed by the eof
+  -- update message number for up to 7 packets  
+  for i = 0, 6 do
+    if length > 6 and peek(11) == 2 and peek(12) == i then msgNumber = i + 2 end
+  end
+  -- using this since patch parsing from E1 is not working
+  if msgNumber == 8 then p_flag = true end
+
+  -- EOF detection: 9th message of a patch dump is an eof message and is always 6 bytes
+  if p_flag  and length == 6 and peek(2) == 0x7E then
+    msgNumber = 9
+  elseif a_flag and length == 6 and peek(2) == 0x7E then
+    msgNumber = 3
+  elseif g_flag  and length == 6 and peek(2) == 0x7E then
+    msgNumber = 5
+  end
+-- validate header only when we've detected a header message
+  if msgNumber == 1 then
+    -- ensure bytes 2..4 match vendor ID: 00 20 32 (Behringer)
+    if not (peek(2) == 0x00 and peek(3) == 0x20 and peek(4) == 0x32) then print("Not Behringer") return end
+    if peek(7) ~= 0x3A then print("Not UB-Xa") return end
+  end
+
+  print("sysex (" .. msgNumber .. ") message received: " .. "interface=" .. midiInput.interface .. " length=" .. length)
+  -- Print 16 hexadecimal bytes per line.
+  for startIndex = 1, length, 16 do
+    local bytes = {}
+    local endIndex = math.min(startIndex + 15, length)
+    for i = startIndex, endIndex do
+        bytes[#bytes + 1] = string.format("%02X", peek(i))
+    end
+    print(string.format("data[%04X]: %s", startIndex - 1, table.concat(bytes, " ")))
+  end
+  -- parse the sysex dump parameters
+  -- first, put each message from the patch sysEx dump into the "dump" variable
+  local temp = {}
+  for i = 1,length do
+    temp[i] = peek(i)
+  end
+  table.insert(dump,temp)
+
+  if p_flag and msgNumber == 9 then patch(dump) end -- for a patch dump the eof is message 9
+  if a_flag and msgNumber == 3 then atrophy(dump) end -- for atrophy settings the eof is message 3
+  if g_flag and msgNumber == 5 then global(dump) end -- for global settings the eof is message 5
+  msgNumber = msgNumber + 1 -- update message number
+end
