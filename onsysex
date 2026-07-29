@@ -8,7 +8,6 @@ local EOF_SYSEX_SECOND_BYTE = 0x7E
 
 local function safe_peek(sysexBlock, length, i)
   if type(i) ~= "number" or i < 1 or i > length then return nil end
-  -- assume sysexBlock:peek exists and returns a number for that index
   return sysexBlock:peek(i)
 end
 
@@ -29,9 +28,31 @@ local function is_vendor_match(sysexBlock, length)
      and safe_peek(sysexBlock, length, 4) == VENDOR_ID[3]
 end
 
+-- Keep only the first header (msg[11]==1) and the following packet (msg[11]==2).
+-- If we can't find a header+packet pair, return the original dump unchanged.
+local function keep_first_header_packet(dump)
+  local out = {}
+  local found_header = false
+  for idx, msg in ipairs(dump) do
+    local msg_type = msg and msg[11]
+    if not found_header and msg_type == HEADER_MSG_TYPE then
+      out[#out+1] = msg
+      found_header = true
+    elseif found_header and msg_type == PACKET_MSG_TYPE then
+      out[#out+1] = msg
+      break
+    end
+  end
+  if #out == 2 then
+    return out
+  else
+    -- fallback: if format isn't as expected, return the original dump
+    return dump
+  end
+end
+
 function midi.onSysex(midiInput, sysexBlock)
   local ok, err = pcall(function()
-    -- basic validation
     if not midiInput or not sysexBlock then
       print("onSysex: missing midiInput or sysexBlock")
       return
@@ -57,12 +78,10 @@ function midi.onSysex(midiInput, sysexBlock)
 
     local peek = function(i) return safe_peek(sysexBlock, length, i) end
 
-    -- detect header message
     if length > 6 and peek(11) == HEADER_MSG_TYPE then
       state.msgNumber = 1
     end
 
-    -- if we have a header, validate vendor & model and detect dump type reliably
     if state.msgNumber == 1 then
       if not is_vendor_match(sysexBlock, length) then
         print("onSysex: Not Behringer vendor; ignoring message")
@@ -73,10 +92,8 @@ function midi.onSysex(midiInput, sysexBlock)
         return
       end
 
-      -- peek ASCII fields safely. header's ASCII starts at position 21 in original code
       local hdrText = peek_string(sysexBlock, length, 21, 32 - 21 + 1)
       hdrText = hdrText or ""
-      -- normalize for comparisons
       local textLower = hdrText:lower()
       if textLower:find("upper patch", 1, true) then
         state.p_flag, state.g_flag, state.a_flag = true, false, false
@@ -87,17 +104,14 @@ function midi.onSysex(midiInput, sysexBlock)
       end
     end
 
-    -- update message number for packet messages (safe loop)
     for i = 0, 6 do
       if length > 6 and peek(11) == PACKET_MSG_TYPE and peek(12) == i then
         state.msgNumber = i + 2
       end
     end
 
-    -- fallback: if we've accumulated 8 packets, mark as full patch
     if state.msgNumber == 8 then state.p_flag = true end
 
-    -- EOF detection (ensure length check and that second byte matches expected EOF marker)
     local secondByte = peek(2)
     if length == 6 and secondByte == EOF_SYSEX_SECOND_BYTE then
       if state.p_flag then
@@ -109,11 +123,9 @@ function midi.onSysex(midiInput, sysexBlock)
       end
     end
 
-    -- logging summary
     print(string.format("sysex (msg=%d) received: interface=%s length=%d",
       state.msgNumber, iface, length))
 
-    -- hex dump (safe)
     for startIndex = 1, length, 16 do
       local bytes = {}
       local endIndex = math.min(startIndex + 15, length)
@@ -124,7 +136,6 @@ function midi.onSysex(midiInput, sysexBlock)
       print(string.format("data[%04X]: %s", startIndex - 1, table.concat(bytes, " ")))
     end
 
-    -- collect message bytes into temp table
     local temp = {}
     for i = 1, length do
       local b = peek(i)
@@ -133,14 +144,12 @@ function midi.onSysex(midiInput, sysexBlock)
     end
     table.insert(state.dump, temp)
 
-    -- on EOF call appropriate parser and then reset state for that interface
     if state.p_flag and state.msgNumber == 9 then
       if type(patch) == "function" then
         pcall(patch, state.dump)
       else
         print("onSysex: patch() not available")
       end
-      -- reset
       sysex_states[iface] = { msgNumber = 0, dump = {}, p_flag = false, g_flag = false, a_flag = false }
     elseif state.a_flag and state.msgNumber == 3 then
       if type(atrophy) == "function" then
@@ -151,13 +160,17 @@ function midi.onSysex(midiInput, sysexBlock)
       sysex_states[iface] = { msgNumber = 0, dump = {}, p_flag = false, g_flag = false, a_flag = false }
     elseif state.g_flag and state.msgNumber == 5 then
       if type(global) == "function" then
-        pcall(global, state.dump)
+        -- Trim to the first header+packet pair to handle header packet header packet eof
+        local trimmed = keep_first_header_packet(state.dump)
+        if trimmed ~= state.dump then
+          print("onSysex: trimmed dump to first header+packet for global settings")
+        end
+        pcall(global, trimmed)
       else
         print("onSysex: global() not available")
       end
       sysex_states[iface] = { msgNumber = 0, dump = {}, p_flag = false, g_flag = false, a_flag = false }
     else
-      -- advance message number only if there's an explicit numeric state
       state.msgNumber = (type(state.msgNumber) == "number") and (state.msgNumber + 1) or 0
     end
   end)
