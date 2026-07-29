@@ -1,0 +1,103 @@
+function patch(dump)
+  local patchName = "" -- initialize patch name
+  local result = parse_sysex(dump)
+  local param2 = {}  -- store 2 byte paramters
+  local param1 = {}  -- store 1 byte parameters
+  local idx = 1
+  if result then
+    patchName = get_patch_name(result.data)
+    print("Patch name: " .. patchName)
+    info.setText(patchName)
+    for i = 1,77,2 do -- loop through the 2-byte patch parameters
+      param2[idx] = get_2byte_parameter(result.data,i)
+--      print("2-byte Parameter: " .. idx .. " value: " ..param2[idx] )
+      idx = idx+1
+    end
+    idx = 1
+    for i = 95,155 do -- loop through the 1-byte parameters.  
+      param1[idx] = get_1byte_parameter(result.data,i)
+      print("1-byte Parameter: " .. idx .. " value: " ..param1[idx] )
+      idx = idx + 1
+    end
+    idx = 1
+    -- parse the 39 2 byte parameters and multiple 0-255 range parameters by 64 to scale to 0-16383 range of nrpn
+    -- see manual for nrpn numbers 
+    local paramList = {0,1,2,3,128,256,257,258,259,260,384,385,386,387,388,389,390,391,392,393,394,395,396,512,513,514,515,640,641,642,643,768,770,772,774,769,771,773,775}
+    for i = 1,39 do
+      parameterMap.set (deviceId, 3, paramList[i], param2[i]*64) 
+    end
+    -- 1 byte parameters ---------------------------------------
+    parameterMap.set (deviceId, 3, 4, param1[1])    -- unison mode toggle
+    parameterMap.set (deviceId, 3, 5, param1[2])    -- poly voice #
+    parameterMap.set (deviceId, 3, 6, param1[3])    -- unison voice #
+    -- 4 ??
+    parameterMap.set (deviceId, 3, 11, param1[5])   -- portamento spread
+    parameterMap.set (deviceId, 3, 12, param1[6])   -- portamento range
+    parameterset({37,38,39,40},param1[7])          -- LFO modulation
+    parameterMap.set (deviceId, 3, 262, param1[8])  -- LFO shape
+    parameterset({50,51,27},param1[9])             -- CH1 LFO destinations
+    parameterset({30,31},param1[10])               -- CH1 quant/invert
+    parameterset({33,35,44},param1[11])            -- CH2 LFO destinations
+    parameterset({49,46},param1[12])               -- CH2 quant/invert
+    parameterset({136,137,138,139,140},param1[13])  -- Filter env mods
+    parameterset({141,142,143,144,145},param1[14])  -- VCA env mods
+    parameterset({2,9},param1[15])                  -- OSC2 modes
+    parameterMap.set (deviceId, 3, 533, param1[16])  -- Osc FEnv range
+    parameterset({3,154,155},param1[17])            -- Osc1 state
+    parameterMap.set (deviceId, 3, 518, param1[18])  -- Osc1 shapes
+    -- 19?
+    local paramlist = {519,520,536,525,534,526,537}
+    for i = 1,7 do
+      parameterMap.set (deviceId, 3, paramlist[i], param1[i+19])  -- Osc2 level
+    end
+--[[
+    parameterMap.set (deviceId, 3, 519, param1[20])  -- Osc2 level
+    parameterMap.set (deviceId, 3, 520, param1[21])  -- Osc2 shapes
+    parameterMap.set (deviceId, 3, 536, param1[22])  -- Osc2 quant interval for transpose
+    parameterMap.set (deviceId, 3, 525, param1[23])  -- Osc1 pitch mod depth
+    parameterMap.set (deviceId, 3, 534, param1[24])  -- Osc2 pitch mod depth
+    parameterMap.set (deviceId, 3, 526, param1[25])  -- Osc1 PWM depth
+    parameterMap.set (deviceId, 3, 537, param1[26])  -- Osc2 PWM depth
+]]
+    parameterset({76,89},param1[27])                -- Filter key track and mode
+
+    parameterMap.set (deviceId, 3, 664, param1[28])  -- Range of filter tracking
+    parameterMap.set (deviceId, 3, 650, param1[29])  -- Range of filter envelope 
+    parameterMap.set (deviceId, 3, 647, param1[30])  -- Range of filter frequency
+    parameterMap.set (deviceId, 3, 653, param1[31])  -- Range of filter LFO
+    parameterMap.set (deviceId, 3, 657, param1[32])  -- Range of filter pedal
+    parameterMap.set (deviceId, 3, 776, param1[33])  -- mod source 1
+    parameterMap.set (deviceId, 3, 777, param1[34])  -- mod dest 1
+    parameterMap.set (deviceId, 3, 780, param1[35])  -- mod source 2
+    parameterMap.set (deviceId, 3, 781, param1[36])  -- mod dest 2
+    parameterMap.set (deviceId, 3, 784, param1[37])  -- mod source 3
+    parameterMap.set (deviceId, 3, 785, param1[38])  -- mod dest 3
+    parameterMap.set (deviceId, 3, 788, param1[39])  -- mod source 4
+    parameterMap.set (deviceId, 3, 789, param1[40])  -- mod dest 4
+    parameterMap.set (deviceId, 3, 778, param1[41])  -- mod source 5
+    parameterMap.set (deviceId, 3, 779, param1[42])  -- mod dest 5
+    parameterMap.set (deviceId, 3, 782, param1[43])  -- mod source 6
+    parameterMap.set (deviceId, 3, 783, param1[44])  -- mod dest 6
+    parameterMap.set (deviceId, 3, 786, param1[45])  -- mod source 7
+    parameterMap.set (deviceId, 3, 787, param1[46])  -- mod dest 7
+    parameterMap.set (deviceId, 3, 790, param1[47])  -- mod source 8
+    parameterMap.set (deviceId, 3, 791, param1[48])  -- mod dest 8
+    parameterMap.set (upperDevice:getId(), 3, 1024, param1[49])  -- ARP enable
+    parameterMap.set (upperDevice:getId(), 3, 1025, param1[50])  -- ARP mode
+    parameterMap.set (upperDevice:getId(), 3, 1026, param1[51])  -- ARP hold
+    parameterMap.set (upperDevice:getId(), 3, 1027, param1[52])  -- ARP time
+    parameterMap.set (upperDevice:getId(), 3, 1028, param1[53])  -- ARP gate length
+    parameterMap.set (upperDevice:getId(), 3, 1029, param1[54])  -- ARP sync
+    parameterMap.set (upperDevice:getId(), 3, 1030, param1[55])  -- ARP octave range
+    -- 56,57 RFU
+    parameterMap.set (deviceId, 3, 913, param1[58])  -- Atrophy preference
+    parameterMap.set (deviceId, 3, 1152, param1[59])  -- Transpose keyboard
+    -- 60 RFU
+    parameterMap.set (deviceId, 3, 138, param1[61])  -- Performance LFO limit
+  else
+    print("Could not read data") return
+  end
+  p_flag = false
+  dump = {}
+  msgNumber = 0
+end
