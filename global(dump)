@@ -1,0 +1,65 @@
+function global(dump)
+  print("global")
+  dump[4][12] = 1  -- set the packet number for the atrophy packet to 1 so there are not two #0 packets 
+  print(#dump)
+  table.remove(dump, 3) -- remove the 3rd message row which is the atrophy header message
+  print("header: " .. dump[1][11] .. " "..dump[1][12].. " packet 1: "..dump[2][11] .. " "..dump[2][12].. " packet 2: "..dump[3][11] .. " "..dump[3][12])
+  local result = parse_sysex(dump)
+  local paramG = {}  -- store 1 byte parameters
+  if result then
+    for i = 1,56,1 do -- loop through the global parameters
+      paramG[i] = get_1byte_parameter(result.data,i)
+      print("1-byte global parameter: " .. i .. " value: " ..paramG[i] )
+    end
+    -- global parameters  
+    parameterMap.set (deviceId, 3, 9, paramG[3])    -- unison note priority
+    parameterMap.set (deviceId, 3, 10, paramG[4])   -- chord mode note priority
+    parameterMap.set (deviceId, 3, 136, paramG[5])  -- lower pitch sens
+    parameterMap.set (deviceId, 3, 137, paramG[6])  -- upper pitch sens
+    parameterMap.set (deviceId, 3, 904, paramG[7])  -- vintage knobs
+    -- 8,9,10,11 RFU
+    parameterMap.set (deviceId, 3, 909, paramG[12])  -- atrophy profile number
+    -- 13 = last patch (bitmask)
+    -- 14 = UI disable (bitmask)
+    -- 15 == atrophy mode
+    parameterMap.set (deviceId, 3, 1152, paramG[16])  -- midi transpose ??
+    parameterMap.set (deviceId, 3, 1154, paramG[17])  -- midi tempo
+    parameterMap.set (deviceId, 3, 1155, paramG[18])  -- midi sync source
+    -- 19 = song position
+    -- 20 = upper midi rx
+    -- 21 = lower midi rx
+    -- 22 = upper midi tx
+    -- 23 = lower midi tx
+    -- 24 = local control (bitmask)
+    -- 25 = forwarding (bitmask)
+    -- 26 = USB (bitmask)
+    -- 27 = DIN (bitmask)
+    parameterMap.set (deviceId, 3, 1165, paramG[28])  -- MPE profile
+    parameterMap.set (deviceId, 3, 1281, paramG[29])  -- velocity curve
+    parameterMap.set (deviceId, 3, 1282, paramG[30])  -- velocity scale
+    parameterMap.set (deviceId, 3, 1283, paramG[31])  -- AT pressure
+    parameterMap.set (deviceId, 3, 1284, paramG[32])  -- AT curve
+    parameterMap.set (deviceId, 3, 1408, paramG[33])  -- Sus pedal assign
+    parameterMap.set (deviceId, 3, 1409, paramG[34])  -- Sus pedal action
+    parameterMap.set (deviceId, 3, 1410, paramG[35])  -- Sus pedal latch
+    parameterMap.set (deviceId, 3, 1411, paramG[36])  -- Prog pedal assign
+    parameterMap.set (deviceId, 3, 1412, paramG[37])  -- Prog pedal action
+    parameterMap.set (deviceId, 3, 1413, paramG[38])  -- Prog pedal latch
+    parameterMap.set (deviceId, 3, 1414, paramG[39])  -- Hold pedal assign
+    parameterMap.set (deviceId, 3, 1415, paramG[40])  -- Hold pedal action
+    parameterMap.set (deviceId, 3, 1416, paramG[41])  -- Hold pedal latch
+    parameterMap.set (deviceId, 3, 1417, paramG[42])  -- Vib pedal assign
+    parameterMap.set (deviceId, 3, 1418, paramG[43])  -- Vib pedal action
+    parameterMap.set (deviceId, 3, 1419, paramG[44])  -- Vib pedal min
+    parameterMap.set (deviceId, 3, 1420, paramG[45])  -- Vib pedal max
+    parameterMap.set (deviceId, 3, 1417, paramG[46])  -- Filter pedal assign
+    parameterMap.set (deviceId, 3, 1418, paramG[47])  -- Filter pedal action
+    parameterMap.set (deviceId, 3, 1419, paramG[48])  -- Filter pedal min
+    parameterMap.set (deviceId, 3, 1420, paramG[49])  -- Filter pedal max
+  else
+    print("Could not read data") return
+  end
+  g_flag = false
+  dump = {}
+  msgNumber = 0
+end
