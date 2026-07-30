@@ -1,0 +1,57 @@
+function atrophy(dump)
+  local result = parse_sysex(dump)
+  if not result or type(result.data) ~= "table" then
+    if DEBUG then print("Could not read data") end
+    return
+  end
+  local paramA = {}  -- store 1 byte parameters
+  local result = parse_sysex(dump)
+  if result then
+    for i = 1,47,1 do -- loop through the atrophy parameters
+      paramA[i] = get_1byte_parameter(result.data,i)
+      print("1-byte atrophy parameter: " .. i .. " value: " ..paramA[i] )
+    end
+    -- parameterMap.set(deviceId, param type, param number, location in sysEx)
+    parameterMap.set (deviceId, 3, 138, paramA[1]) -- max speed of main mod LFO
+    parameterMap.set (deviceId, 3, 267, paramA[2]) -- max speed of performance LFO
+
+    parameterMap.set (deviceId, 3, 521, paramA[4]) -- Osc1 PW left trim
+    parameterMap.set (deviceId, 3, 522, paramA[5]) -- Osc1 PW right trim
+    parameterMap.set (deviceId, 3, 523, paramA[6]) -- Osc2 PW left trim
+    parameterMap.set (deviceId, 3, 524, paramA[7]) -- Osc2 PW right trim
+    parameterMap.set (deviceId, 3, 527, paramA[8]) -- PWM offset
+    parameterMap.set (deviceId, 3, 528, paramA[9]) -- osc drift
+    parameterMap.set (deviceId, 3, 529, paramA[10]) -- osc vol/oct error 
+    parameterMap.set (deviceId, 3, 530, paramA[11]) -- osc drift speed
+    parameterMap.set (deviceId, 3, 531, paramA[12]) -- osc vol/oct chaos !!WRONG!!!
+    parameterMap.set (deviceId, 3, 532, paramA[13]) -- osc initial freq
+    parameterMap.set (deviceId, 3, 645, paramA[14]) -- 2-pole resonance trim
+    parameterMap.set (deviceId, 3, 646, paramA[15]) -- 4-pole resonance trim
+    parameterMap.set (deviceId, 3, 648, paramA[16]) -- 2-pole floor
+    parameterMap.set (deviceId, 3, 649, paramA[17]) -- 4-pole floor
+    parameterMap.set (deviceId, 3, 665, paramA[18]) -- filter env attack linearity      
+    parameterMap.set (deviceId, 3, 666, paramA[19]) -- filter env decay linearity
+    parameterMap.set (deviceId, 3, 652, paramA[20]) -- filter env chaos
+    parameterMap.set (deviceId, 3, 654, paramA[21]) -- filter drift
+    parameterMap.set (deviceId, 3, 655, paramA[22]) -- filter drift speed
+    parameterMap.set (deviceId, 3, 656, paramA[23]) -- filter track offset
+    parameterMap.set (deviceId, 3, 658, paramA[24]) -- filter v/oct error
+    parameterMap.set (deviceId, 3, 659, paramA[25]) -- filter v/oct drift
+    parameterMap.set (deviceId, 3, 660, paramA[26]) -- filter initial freq
+    parameterMap.set (deviceId, 3, 2049, paramA[27]) -- VCA bias 2p filter
+    parameterMap.set (deviceId, 3, 2050, paramA[28]) -- VCA bias unison bias
+    parameterMap.set (deviceId, 3, 2051, paramA[29]) -- VCA bias master
+    parameterMap.set (deviceId, 3, 2054, paramA[30]) -- VCA attack linearity
+    parameterMap.set (deviceId, 3, 2055, paramA[31]) -- VCA decay linearity
+    parameterMap.set (deviceId, 3, 2053, paramA[32]) -- VCA env chaos
+    local paramlist = {2176,2177,2178,2179,2180,2181,2182,2183,2184,2185,2186,2187,2188,2189,2190,2191}
+    for i = 33,#paramlist do
+      parameterMap.set (deviceId, 3, paramlist[i], paramA[i]) -- per voice pan settings
+    end
+  else
+    print("Could not read data") return
+  end
+  a_flag = false
+  dump = {}
+  msgNumber = 0
+end
