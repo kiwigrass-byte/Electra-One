@@ -1,2 +1,2 @@
 # Electra-One
-A test of optimizing lua code
+Improving code for Electra One lua API
