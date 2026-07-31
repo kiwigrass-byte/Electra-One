@@ -669,8 +669,9 @@ function midi.onSysex(midiInput, sysexBlock)
       state.msgNumber = i + 2 + (state.section or 0) * 2
     end
   end
-  -- patch fallback if we've seen 8 packets overall.  Need this because patch request is not working yet
-  if state.msgNumber == 8 then state.p_flag = true end
+  -- patch fallback if we've seen 8 packets and 8th is correct length overall.  Need this because patch request is not working yet
+--  if state.msgNumber == 8 and length == 95 then state.p_flag = true end
+
   -- EOF detection
   local secondByte = peek(2)
   local fourthByte = peek(4)
@@ -736,6 +737,7 @@ end)
   end
 end
 
+-- process a patch dump
 function patch(dump)
   -- parse of the incoming dump
   local result = parse_sysex(dump)
