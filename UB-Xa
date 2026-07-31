@@ -12,8 +12,6 @@ local upperPort      = upperDevice:getPort ()
 local authorDate ="New Ignis 2024"
 info.setText(authorDate)
 timer.setPeriod(1000)
-timer.enable()
-local amountTicks = 0
 events.subscribe(POTS)
 
 function setChannel(valueObject, value) 
@@ -490,7 +488,7 @@ end
 
 function getAtrophy(valueObject, value)
   if value == 0 then return end
-  local aNum = 30+(parameterMap.get(deviceId, PT_NRPN, 909)) -- atrophy ascii profile # in decimal
+  local aNum = 49+(math.floor(parameterMap.get(deviceId, PT_NRPN, 909))) -- atrophy ascii profile # in decimal
   local message = {0x00, 0x20, 0x32, 0x00, 0x01, 0x21, 0x7F, 0x74, 0x07, 
     0x03, 0x00, 0x42, 0x49, 0x4E, 0x20, 0x41, 0x74, 0x72, 0x6F, 0x70, 
     0x68, 0x79, 0x58, 0x20, aNum, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20}
@@ -524,7 +522,7 @@ end
 function getAtrophyGlobals(valueObject,value)
   if value == 0 then return end
   print ("Requesting atrophy and global settings...");
-  local aNum = math.floor(parameterMap.get(deviceId, PT_VIRTUAL, 10006)) -- in ascii decimal
+  local aNum = 49+(math.floor(parameterMap.get(deviceId, PT_NRPN, 909))) -- in ascii decimal
   local message = {0x00, 0x20, 0x32, 0x00, 0x01, 0x21, 0x7F, 0x74, 0x07, 
     0x03, 0x00, 0x42, 0x49, 0x4E, 0x20, 0x41, 0x74, 0x72, 0x6F, 0x70, 
     0x68, 0x79, 0x58, 0x20, aNum, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20}
@@ -564,6 +562,7 @@ local MODEL_BYTE = 0x3A              -- UB-Xa model identifier
 local HEADER_MSG_TYPE = 1
 local PACKET_MSG_TYPE = 2
 local EOF_SYSEX_SECOND_BYTE = 0x7E
+local EOF_SYSEX_FOURTH_BYTE = 0x7B
 
 local function safe_peek(sysexBlock, length, i)
   if type(i) ~= "number" or i < 1 or i > length then return nil end
@@ -674,7 +673,9 @@ function midi.onSysex(midiInput, sysexBlock)
   if state.msgNumber == 8 then state.p_flag = true end
   -- EOF detection
   local secondByte = peek(2)
-  if length == 6 and secondByte == EOF_SYSEX_SECOND_BYTE then
+  local fourthByte = peek(4)
+
+  if length == 6 and secondByte == EOF_SYSEX_SECOND_BYTE and fourthByte == EOF_SYSEX_FOURTH_BYTE then
     if state.p_flag then
       state.msgNumber = 9
     elseif state.a_flag then
@@ -854,7 +855,37 @@ function patch(dump)
   msgNumber = 0
 end
 
+local function hex_range(msg, fromIdx, toIdx)
+  local parts = {}
+  for i = fromIdx, toIdx do parts[#parts+1] = msg[i] or 0 end
+  return table.insert(parts)
+end
+
+local function bytes_to_printable_string(msg, fromIdx, toIdx)
+  if type(msg) ~= "table" then return "" end
+  local out = {}
+  for i = fromIdx, toIdx do
+    local b = msg[i] or 0
+    if b == 0 then
+      -- skip or out[#out+1] = " "  -- choose skip or convert to space
+    elseif b >= 32 and b <= 126 then
+      out[#out+1] = string.char(b)
+    else
+      out[#out+1] = "?"
+    end
+  end
+  return out
+end
+
 function atrophy(dump)
+  --print atrophy profile name
+  local out = bytes_to_printable_string(dump[2], 69, 75)
+  local s = table.concat(out)
+  local name = (s:match("^%s*(.-)%s*$") or "")
+  print("atrophy name (clean):"..name)
+  for j = 1,6 do
+    parameterMap.set(deviceId, 0, 15000+j-1, string.byte(out[j]))
+  end
   -- parse of the incoming dump
   local result = parse_sysex(dump)
   if not result or type(result.data) ~= "table" then
@@ -960,10 +991,14 @@ function global(dump)
     {137, 6}, -- Upper pitch sensitivity
     {904, 7}, -- vintage knob (8,9,10,11 are RFU)
     {909,  12}, -- Atrophy profile number (13,14 are bitmasked UI lastPatch and UIDisable  settings)
-    {912,  15}, -- global transpose
-    {1152, 16}, -- midi tempo
-    {1154, 17}, -- midi sync source
-    {1155, 18}, -- 19-27 are MIDI settings
+    {912,  15}, -- Atrophy mode
+    {1166, 16}, -- global transpose
+    {1154, 17}, -- midi tempo 
+    {1155, 18}, -- midi sync source (19 is song position - bitmasked)
+    {1157, 20}, -- upper midi rx channel
+    {1158, 21}, -- lower midi rx channel
+    {1159, 22}, -- upper midi tx channel
+    {1160, 23}, -- lower midi tx channel (24-27 are othe rmidi settings - bitmasked)
     {1165, 28}, -- MPE profile
     {1281, 29}, -- Velocity curve 
     {1282, 30}, -- Velocity scale
@@ -985,7 +1020,7 @@ function global(dump)
     {1421, 46}, -- Filter pedal assign
     {1422, 47}, -- Filter pedal action
     {1423, 48}, -- Filter pedal min
-    {1424, 49}, -- Filter pedal max)
+    {1424, 49}, -- Filter pedal max (50 is performance panel options - bitmasked)
     {1664, 53}, -- turn voices 1-8 on/off
     {1665, 54}, -- turn voices 9-16 on/off
   }
