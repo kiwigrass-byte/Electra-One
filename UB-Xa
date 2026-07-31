@@ -1,19 +1,32 @@
 -- Behringer UB-Xa
 --deviceId = 1 -- the device ID used in the E1 preset
-currentDevice  = devices.get(1)
-deviceId = currentDevice:getId()
-currentChannel = currentDevice:getChannel ()
-currentPort    = currentDevice:getPort ()
-upperDevice    = devices.get(2)
-upperChannel   = upperDevice:getChannel ()
-upperPort      = upperDevice:getPort ()
+local currentDevice  = devices.get(1)
+local deviceId = currentDevice:getId()
+local currentChannel = currentDevice:getChannel ()
+local currentPort    = currentDevice:getPort ()
+local upperDevice    = devices.get(2)
+local upperChannel   = upperDevice:getChannel ()
+local upperPort      = upperDevice:getPort ()
 --lowerDevice = devices.get(3)
 --lowerChannel   = lowerDevice:getChannel ()
-authorDate ="New Ignis 2024"
+local authorDate ="New Ignis 2024"
 info.setText(authorDate)
 timer.setPeriod(500)
-amountTicks = 0
+local amountTicks = 0
 events.subscribe(POTS)
+
+function setChannel(valueObject, value) 
+  -- if value ==0 then value = 3 end -- default behind the screens on Global Channel
+  local selectedDevice= devices.get(value+2)
+  currentChannel = selectedDevice:getChannel ()
+  currentDevice:setChannel (currentChannel )
+end
+
+function seqStartStop(valueObject, value)
+  if value == 1 then midi.sendStart(currentPort)
+    else midi.sendStop(currentPort)
+  end
+end
 
 -- display functions -----------------------------------------------------------------------------------------------------------
 function displayChar (valueObject, value)
@@ -47,6 +60,10 @@ end
 function divide4(valueObject, value)
     return (string.format ("%.1f", value/4))
 end
+-- Add semitones, scaled to 64 = 0
+function semitones64 (valueObject, value)
+    return (string.format ("%i semitones", value-64))
+end
 -- Add semitones, divided by 8
 function semitones8 (valueObject, value)
     return (string.format ("%.2f semitones", value/8))
@@ -59,7 +76,6 @@ end
 function trackOffset (valueObject, value)
     return (string.format ("%d semitones", -value))
 end
-
 -- Add Hz for max/min LFO speed
 function toHertz1 (valueObject, value)
   local x = (2^((value-255)/27.63083863))*60
@@ -169,147 +185,103 @@ function events.onPotTouchChange(potId, controlId, touched)
   end
 end
 -------------------------------------------bitmasked parameters -------------------------------------------------------------------------------------
+local function sendNrpn(port, channel, parameter, value)
+  local pMSB = (parameter >> 7) & 0x7F
+  local pLSB = parameter & 0x7F
+  local vMSB = (value >> 7) & 0x7F
+  local vLSB = value & 0x7F
+  midi.sendControlChange(port, channel, 99, pMSB)
+  midi.sendControlChange(port, channel, 98, pLSB)
+  midi.sendControlChange(port, channel, 6, vMSB)
+  midi.sendControlChange(port, channel, 38, vLSB)
+end
 
-function sendNrpn(port, channel, parameter, value)
-    local parameterMSB = (parameter >> 7) & 0x7F
-    local parameterLSB = parameter & 0x7F
-    local valueMSB = (value >> 7) & 0x7F
-    local valueLSB = value & 0x7F
-    local messages = {
-        {channel = channel, type = CONTROL_CHANGE, controllerNumber = 99, value = parameterMSB},
-        {channel = channel, type = CONTROL_CHANGE, controllerNumber = 98, value = parameterLSB},
-        {channel = channel, type = CONTROL_CHANGE, controllerNumber = 6, value = valueMSB},
-        {channel = channel, type = CONTROL_CHANGE, controllerNumber = 38, value = valueLSB}
-    }
-    for i, msg in ipairs(messages) do
-        midi.sendMessage(port, msg)
+-- bitmask functions ---
+local PM = parameterMap
+local PT = PT_VIRTUAL
+local function sendBitmask(paramNumber, deviceIndex, paramList)
+  -- paramList is a list of virtual parameter indices where LSB->first element
+  local result = 0
+  local dev = deviceIndex or 1
+  for i,p in ipairs(paramList) do
+    if p and PM.get(dev, PT, p) ~= 0 then
+      result = result + (1 << (i-1))
     end
+  end
+  sendNrpn(currentPort, currentChannel, paramNumber, result)
 end
 
 function bitMask007() -- NRPN 0/7 = 7 ControlPortamentoSettings 
 -- Bitmask: Match (0001) Quantize (0010) Bend (0100) Exponential (1000)
-  local result = parameterMap.get (1, PT_VIRTUAL, 54) * 2^0
-   + parameterMap.get (1, PT_VIRTUAL, 60) * 2^1
-   + parameterMap.get (1, PT_VIRTUAL, 59) * 2^2
-   + parameterMap.get (1, PT_VIRTUAL, 65) * 2^3
-  sendNrpn(currentPort, currentChannel, 7, result)
-end
-
-function bitMask205() -- NRPN 2/5 = 261 ModulationLFOMods 
--- Bitmask: LFO Track on~LFO Track off (0001) LFOEnv2 Rate on~LFOEnv2 Rate off (0010) TempoLock (0100) LFOTrig (1000)
-  local result = parameterMap.get (1, PT_VIRTUAL, 37) * 2^0
-   + parameterMap.get (1, PT_VIRTUAL, 38) * 2^1
-   + parameterMap.get (1, PT_VIRTUAL, 39) * 2^2
-   + parameterMap.get (1, PT_VIRTUAL, 40) * 2^3
-  sendNrpn(currentPort, currentChannel, 261, result)
-end
-
-function bitMask207() -- NRPN 2/7 = 263 ModulationChannel1Sends 
--- Bitmask: C1 OSC1 LFO on~C1 OSC1 LFO off (001) C1 OSC2 LFO on~C1 OSC2 LFO off (010) C1 Flt LFO on~C1 Flt LFO off (100)
-  local result = parameterMap.get (1, PT_VIRTUAL, 50) * 2^0
-   + parameterMap.get (1, PT_VIRTUAL, 51) * 2^1
-   + parameterMap.get (1, PT_VIRTUAL, 27) * 2^2
-  sendNrpn(currentPort, currentChannel, 263, result)
-end
-
-function bitMask208() -- NRPN 2/8 = 264 ModulationChannel1Mods 
--- Bitmask: C1 Quant on~C1 Quant off (01) LFOEnv1 Inv on~LFOEnv1 Inv off (10)
-  local result = parameterMap.get (1, PT_VIRTUAL, 30) * 2^0
-   + parameterMap.get (1, PT_VIRTUAL, 31) * 2^1
-  sendNrpn(currentPort, currentChannel, 264, result)
-end
-
-function bitMask209() -- NRPN 2/9 = 265 ModulationChannel2Sends 
--- Bitmask: C2 PWM1 LFO on~C2 PWM1 LFO off (001) C2 PWM2 LFO on~C2 PWM2 LFO off (010) C2 Vol LFO on~C2 Vol LFO off (100)
-  local result = parameterMap.get (1, PT_VIRTUAL, 33) * 2^0
-   + parameterMap.get (1, PT_VIRTUAL, 35) * 2^1
-   + parameterMap.get (1, PT_VIRTUAL, 44) * 2^2
-  sendNrpn(currentPort, currentChannel, 265, result)
-end
-
-function bitMask210() -- NRPN 2/10 = 266 ModulationChannel2Mods 
--- Bitmask: C2 Quant on~C2 Quant off (01) LFOEnv2 Inv on~LFOEnv2 Inv off (10)
-  local result = parameterMap.get (1, PT_VIRTUAL, 49) * 2^0
-   + parameterMap.get (1, PT_VIRTUAL, 46) * 2^1
-  sendNrpn(currentPort, currentChannel, 266, result)
-end
-
-function bitMask212() -- NRPN 2/12 = 268 ModulationQuirks 
--- Bitmask: FlipSquare (01) FlipVCFMod (10)
-  local result = parameterMap.get (1, PT_VIRTUAL, 52) * 2^0
-   + parameterMap.get (1, PT_VIRTUAL, 55) * 2^1
-  sendNrpn(currentPort, currentChannel, 268, result)
-end
-
-function bitMask313() -- NRPN 3/13 = 397 EnvelopesFilterMods 
--- Bitmask: Flip (00001) Repeat (00010) Retrig (00100) Loop (01000) Legato (10000)
-  local result = parameterMap.get (1, PT_VIRTUAL, 136) * 2^0
-   + parameterMap.get (1, PT_VIRTUAL, 137) * 2^1
-   + parameterMap.get (1, PT_VIRTUAL, 138) * 2^2
-   + parameterMap.get (1, PT_VIRTUAL, 139) * 2^3
-   + parameterMap.get (1, PT_VIRTUAL, 140) * 2^4
-  sendNrpn(currentPort, currentChannel, 397, result)
-end
-
-function bitMask314() -- NRPN 3/14 = 398 EnvelopesLoudnessMods 
--- Bitmask: Flip (00001) Repeat (00010) Retrig (00100) Loop (01000) Legato (10000)
-  local result = parameterMap.get (1, PT_VIRTUAL, 141) * 2^0
-   + parameterMap.get (1, PT_VIRTUAL, 142) * 2^1
-   + parameterMap.get (1, PT_VIRTUAL, 143) * 2^2
-   + parameterMap.get (1, PT_VIRTUAL, 144) * 2^3
-   + parameterMap.get (1, PT_VIRTUAL, 145) * 2^4
-  sendNrpn(currentPort, currentChannel, 398, result)
-end
-
-function bitMask404() -- NRPN 4/4 = 516 ModulationChannel1Mods 
--- Bitmask: OSC2 sync on~OSC2 sync off (01) OSC2 f-env on~OSC2 f-env off (10)
-  local result = parameterMap.get (1, PT_VIRTUAL, 2) * 2^0
-   + parameterMap.get (1, PT_VIRTUAL, 9) * 2^1
-  sendNrpn(currentPort, currentChannel, 516, result)
-end
-
-function bitMask405() -- NRPN 4/5 = 517 OscillatorsOSC1State
--- Bitmask: OSC1 full~OSC1 off (001) OSC1 VCO LFO 180~OSC1 VCO LFO 0 (010) OSC1 PWM LFO 180~OSC1 PWM LFO 0 (100)
-  local result = parameterMap.get (1, PT_VIRTUAL, 3) * 2^0
-   + parameterMap.get (1, PT_VIRTUAL, 154) * 2^1 -- 2 bits ??
-   + parameterMap.get (1, PT_VIRTUAL, 155) * 2^3 -- 2 bits ??
-  sendNrpn(currentPort, currentChannel, 517, result)
-end
-
-function bitMask504() -- NRPN 5/4 = 644 FilterModes 
--- Bitmask: Filter track on~Filter track off (01) 4 pole filter~2 pole filter (10)
-  local result = parameterMap.get (1, PT_VIRTUAL, 76) * 2^0
-   + parameterMap.get (1, PT_VIRTUAL, 89) * 2^1
-  sendNrpn(currentPort, currentChannel, 644, result)
+  sendBitmask(7, 1, {54,60,59,65})
 end
 
 function bitMask101() -- NRPN 1/1 = 129 PerformanceSettings 
 -- Bitmask: Bend Osc2 only~Bend Osc1&Osc2 (000001) Custombend~Bend +/-2 (000010) OSC1 (000100) OSC2 (001000) Upper (010000) Lower (100000)
-  local result = parameterMap.get (2, PT_VIRTUAL, 8) * 2^0
-   + parameterMap.get (2, PT_VIRTUAL, 10) * 2^1
-   + parameterMap.get (2, PT_VIRTUAL, 19) * 2^2
-   + parameterMap.get (2, PT_VIRTUAL, 97) * 2^3
-   + parameterMap.get (2, PT_VIRTUAL, 103) * 2^4
-   + parameterMap.get (2, PT_VIRTUAL, 109) * 2^5
-  sendNrpn(currentPort, currentChannel, 129, result)
+  sendBitmask(129, 1, {2,10,19,97,103,109}) 
 end
 
 function bitMask107() -- NRPN 1/7 = 135 PerformanceLFOMods 
 -- Bitmask: Track (0001) Envelope (0010) TempoLock (0100) LFOTrig (1000)
-  local result = parameterMap.get (2, PT_VIRTUAL, 115) * 2^0
-   + parameterMap.get (2, PT_VIRTUAL, 117) * 2^1
-   + parameterMap.get (2, PT_VIRTUAL, 118) * 2^2
-   + parameterMap.get (2, PT_VIRTUAL, 119) * 2^3
-  sendNrpn(currentPort, currentChannel, 135, result)
+  sendBitmask(135, 1, {117,118,119}) 
 end
--- request functions -----------------------------------------------------------------------------------------------------------
 
-function setChannel(valueObject, value) -- 20221029 'Both Parts- setting is disabled as Summit is not responding to it.
-  -- if value ==0 then value = 3 end -- default behind the screens on Global Channel
-  local selectedDevice= devices.get(value+2)
-  currentChannel = selectedDevice:getChannel ()
-  currentDevice:setChannel (currentChannel )
+function bitMask205() -- NRPN 2/5 = 261 ModulationLFOMods 
+-- Bitmask: LFO Track on~LFO Track off (0001) LFOEnv2 Rate on~LFOEnv2 Rate off (0010) TempoLock (0100) LFOTrig (1000)
+  sendBitmask(261, 1, {37,38,39,40}) 
 end
+
+function bitMask207() -- NRPN 2/7 = 263 ModulationChannel1Sends 
+-- Bitmask: C1 OSC1 LFO on~C1 OSC1 LFO off (001) C1 OSC2 LFO on~C1 OSC2 LFO off (010) C1 Flt LFO on~C1 Flt LFO off (100)
+  sendBitmask(263, 1, {50,51,27}) 
+end
+
+function bitMask208() -- NRPN 2/8 = 264 ModulationChannel1Mods 
+-- Bitmask: C1 Quant on~C1 Quant off (01) LFOEnv1 Inv on~LFOEnv1 Inv off (10)
+  sendBitmask(264, 1, {30,31}) 
+end
+
+function bitMask209() -- NRPN 2/9 = 265 ModulationChannel2Sends 
+-- Bitmask: C2 PWM1 LFO on~C2 PWM1 LFO off (001) C2 PWM2 LFO on~C2 PWM2 LFO off (010) C2 Vol LFO on~C2 Vol LFO off (100)
+  sendBitmask(265, 1, {33,35,44}) 
+end
+
+function bitMask210() -- NRPN 2/10 = 266 ModulationChannel2Mods 
+-- Bitmask: C2 Quant on~C2 Quant off (01) LFOEnv2 Inv on~LFOEnv2 Inv off (10)
+  sendBitmask(266, 1, {49,46}) 
+end
+
+function bitMask212() -- NRPN 2/12 = 268 ModulationQuirks 
+-- Bitmask: FlipSquare (01) FlipVCFMod (10)
+  sendBitmask(268, 1, {52,55}) 
+end
+
+function bitMask313() -- NRPN 3/13 = 397 EnvelopesFilterMods 
+-- Bitmask: Flip (00001) Repeat (00010) Retrig (00100) Loop (01000) Legato (10000)
+  sendBitmask(397, 1, {137,138,139,140}) 
+end
+
+function bitMask314() -- NRPN 3/14 = 398 EnvelopesLoudnessMods 
+-- Bitmask: Flip (00001) Repeat (00010) Retrig (00100) Loop (01000) Legato (10000)
+  sendBitmask(398, 1, {141,142,143,144,145}) 
+end
+
+function bitMask404() -- NRPN 4/4 = 516 ModulationChannel1Mods 
+-- Bitmask: OSC2 sync on~OSC2 sync off (01) OSC2 f-env on~OSC2 f-env off (10)
+  sendBitmask(516, 1, {2,9}) 
+end
+
+function bitMask405() -- NRPN 4/5 = 517 OscillatorsOSC1State
+-- Bitmask: OSC1 full~OSC1 off (001) OSC1 VCO LFO 180~OSC1 VCO LFO 0 (010) OSC1 PWM LFO 180~OSC1 PWM LFO 0 (100)
+  sendBitmask(517, 1, {3,154,155}) 
+end
+
+function bitMask504() -- NRPN 5/4 = 644 FilterModes 
+-- Bitmask: Filter track on~Filter track off (01) 4 pole filter~2 pole filter (10)
+  sendBitmask(644, 1, {76,89}) 
+end
+
+-- patch select program change functions -----------------------------------------------------------------------------------------------------------
 
 function selectIt(ValueObject, value)
    if value==0 then return end
@@ -329,11 +301,6 @@ function selectIt(ValueObject, value)
     print (string.format("selecting patch: Bank = %d, Prog = %d", bankLSB, progNum))
    midi.sendControlChange(upperPort , upperChannel , 32, bankLSB)
    midi.sendProgramChange(upperPort , upperChannel , progNum)
-end
-function seqStartStop(valueObject, value)
-  if value == 1 then midi.sendStart(currentPort)
-    else midi.sendStop(currentPort)
-  end
 end
 
 -------------------------------------------------------------------------
@@ -447,22 +414,24 @@ function parse_sysex(messages)
   return nil
 end
 
+local function trim(s) return s:match("^%s*(.-)%s*$") end
+
 function get_patch_name(data)
-  local startIdx = 79 
-  local name = {}
+  if type(data) ~= "table" then return "" end
+  local startIdx = 79
+  local nameChars = {}
   for i = startIdx, startIdx + 15, 2 do
-    -- data[i] is the first byte, data[i+1] is the second byte
-    local b1 = data[i]
-    local b2 = data[i+1]
-     -- Process the first character of the pair
-    local char1 = ((b1 & 0x80) >> 7) + (b2 << 1)
-    table.insert(name, string.char(char1))
-    -- Process the second character of the pair
+    local b1 = data[i] or 0
+    local b2 = data[i+1] or 0
+    local char1 = ((b1 & 0x80) >> 7) + ((b2 & 0xFF) << 1)
     local char2 = b1 & 0x7F
-    table.insert(name, string.char(char2))
+    -- replace non-printable with '?'
+    char1 = (char1 >= 32 and char1 <= 126) and char1 or 63
+    char2 = (char2 >= 32 and char2 <= 126) and char2 or 63
+    nameChars[#nameChars+1] = string.char(char1)
+    nameChars[#nameChars+1] = string.char(char2)
   end
-  -- Combine the character array into a single string
-  return table.concat(name)
+  return trim(table.concat(nameChars))
 end
 
 function get_2byte_parameter(data,idx)
@@ -492,66 +461,62 @@ function getCurrentProgram(valueObject, value)
   if value == 0 then return end
   local message = {0x00, 0x20, 0x32, 0x00, 0x01, 0x21, 0x7F, 0x74, 0x07, 0x03, 0x00, 0x42, 0x49, 0x4E, 0x20, 0x43, 0x75, 0x72, 0x72, 0x65, 0x6E, 0x74, 0x20, 0x50, 0x72, 0x6F, 0x67, 0x72, 0x61, 0x6D, 0x20}
   midi.sendSysex (currentPort, message)
-  c_flag = true
 end
 
 function getUpperPatch(valueObject, value)
   if value == 0 then return end
   local message = {0x00, 0x20, 0x32, 0x00, 0x01, 0x21, 0x7F, 0x74, 0x07, 0x03, 0x00, 0x42, 0x49, 0x4E, 0x20, 0x55, 0x70, 0x70, 0x65, 0x72, 0x20, 0x50, 0x61, 0x74, 0x63, 0x68, 0x20, 0x20, 0x20, 0x20, 0x20}
   midi.sendSysex (currentPort, message)
-  u_flag = true
 end
 
 function getLowerPatch(valueObject, value)
   if value == 0 then return end
   local message = {0x00, 0x20, 0x32, 0x00, 0x01, 0x21, 0x7F, 0x74, 0x07, 0x03, 0x00, 0x42, 0x49, 0x4E, 0x20, 0x4C, 0x6F, 0x77, 0x65, 0x72, 0x20, 0x50, 0x61, 0x74, 0x63, 0x68, 0x20, 0x20, 0x20, 0x20, 0x20}
   midi.sendSysex (currentPort, message)
-  l_flag = true
 end
 
 function getGlobals(valueObject, value)
   if value == 0 then return end
   local message = {0x00, 0x20, 0x32, 0x00, 0x01, 0x21, 0x7F, 0x74, 0x07, 0x03, 0x00, 0x42, 0x49, 0x4E, 0x20, 0x47, 0x6C, 0x6F, 0x62, 0x61, 0x6C, 0x73, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20}
   midi.sendSysex (currentPort, message)
---  g_flag = true
 end
 
 function getSplitDouble(valueObject, value)
   if value == 0 then return end
   local message = {0x00, 0x20, 0x32, 0x00, 0x01, 0x21, 0x7F, 0x74, 0x07, 0x03, 0x00, 0x42, 0x49, 0x4E, 0x20, 0x53, 0x70, 0x6C, 0x69, 0x74, 0x20, 0x44, 0x6F, 0x75, 0x62, 0x6C, 0x65, 0x20, 0x20, 0x20, 0x20}
   midi.sendSysex (currentPort, message)
-  s_flag = true
 end
 
 function getAtrophy(valueObject, value)
   if value == 0 then return end
   local aNum = math.floor(parameterMap.get(deviceId, PT_VIRTUAL, 10006)) -- in ascii decimal
-  local message = {0x00, 0x20, 0x32, 0x00, 0x01, 0x21, 0x7F, 0x74, 0x07, 0x03, 0x00, 0x42, 0x49, 0x4E, 0x20, 0x41, 0x74, 0x72, 0x6F, 0x70, 0x68, 0x79, 0x58, 0x20, aNum, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20}
+  local message = {0x00, 0x20, 0x32, 0x00, 0x01, 0x21, 0x7F, 0x74, 0x07, 
+    0x03, 0x00, 0x42, 0x49, 0x4E, 0x20, 0x41, 0x74, 0x72, 0x6F, 0x70, 
+    0x68, 0x79, 0x58, 0x20, aNum, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20}
   midi.sendSysex (currentPort, message)
---  a_flag = true
+end
+
+-- helper function to extract ascii bytes from a number
+local function asciiBytesFromNumber(n, width)
+  local s = string.format("%0"..tostring(width).."d", n)
+  local bytes = {}
+  for i=1,#s do bytes[#bytes+1] = string.byte(s,i) end
+  return bytes
 end
 
 function getPatch(valueObject, value)
-  -- ignore 0 (no change)
   if value == 0 then return end
-  -- read parameters (validate nil)
   local bank = parameterMap.get(deviceId, PT_VIRTUAL, 10008)
-  local raw   = parameterMap.get(deviceId, PT_VIRTUAL, 10009)
-  if not bank or raw == nil then
-    return
-  end
-  -- ensure numeric, raw is expected to be 0..127
-  raw = tonumber(raw)
-  if not raw then return end
-  -- use raw directly (no /100) and clamp to valid 0..127
-  local number = math.floor(raw)
-  number = math.max(0, math.min(127, number))
-  -- create zero-padded ASCII digits "NNN" -> bytes
-  local s = string.format("%03d", number)
-  local p1, p2, p3 = string.byte(s, 1, 3)
-  -- construct sysex message (complete and terminated with 0xF7)
-  local message = {0x00, 0x20, 0x32, 0x00, 0x01, 0x21, 0x7F, 0x74, 0x07, 0x03, 0x00,
-    0x42, 0x49, 0x4E, 0x20, 0x50, 0x61, 0x74, 0x63, 0x68, 0x58, 0x20, bank, p1, p2, p3, 0x20, 0x20, 0x20 }
+  local raw  = parameterMap.get(deviceId, PT_VIRTUAL, 10009)
+  if not bank or not raw then return end
+  local number = math.floor(raw / 100)
+  number = math.max(0, math.min(999, number))
+  local digits = asciiBytesFromNumber(number, 3)
+  local message = {
+    0x00,0x20,0x32,0x00,0x01,0x21,0x7F,0x74,0x07,0x03,0x00,
+    0x42,0x49,0x4E,0x20,0x50,0x61,0x74,0x63,0x68,0x58,0x20,
+    bank, digits[1], digits[2], digits[3], 0x20,0x20,0x20, 0xF7
+  }
   midi.sendSysex(currentPort, message)
 end
 
@@ -605,32 +570,8 @@ local function is_vendor_match(sysexBlock, length)
      and safe_peek(sysexBlock, length, 4) == VENDOR_ID[3]
 end
 
--- Keep only the first header (msg[11]==1) and the following packet (msg[11]==2).
--- If we can't find a header+packet pair, return the original dump unchanged.
-local function keep_first_header_packet(dump)
-  local out = {}
-  local found_header = false
-  for idx, msg in ipairs(dump) do
-    local msg_type = msg and msg[11]
-    if not found_header and msg_type == HEADER_MSG_TYPE then
-      out[#out+1] = msg
-      found_header = true
-    elseif found_header and msg_type == PACKET_MSG_TYPE then
-      out[#out+1] = msg
-      break
-    end
-  end
-  if #out == 2 then
-    return out
-  else
-    -- fallback: if format isn't as expected, return the original dump
-    return dump
-  end
-end
-
 -- per-interface sysex state
 local sysex_states = {}
-
 local VENDOR_ID = {0x00, 0x20, 0x32} -- Behringer
 local MODEL_BYTE = 0x3A              -- UB-Xa model identifier
 local HEADER_MSG_TYPE = 1
@@ -767,7 +708,7 @@ function midi.onSysex(midiInput, sysexBlock)
       print(string.format("data[%04X]: %s", startIndex - 1, table.concat(bytes, " ")))
     end
 
-    -- collect this message into dump
+    -- collect each message into dump
     local temp = {}
     for i = 1, length do
       local b = peek(i)
@@ -805,8 +746,7 @@ function midi.onSysex(midiInput, sysexBlock)
 end
 
 function patch(dump)
-  print("upper patch")
-  -- single parse of the incoming dump
+  -- parse of the incoming dump
   local result = parse_sysex(dump)
   if not result or type(result.data) ~= "table" then
     print("Could not read data")
@@ -918,14 +858,14 @@ function patch(dump)
   for _, pair in ipairs(arpParams) do
     pset(upperDevice:getId(), 3, pair[1], param1[pair[2]])
   end
+  -- restore/cleanup original globals
   p_flag = false
   dump = {}
   msgNumber = 0
 end
 
 function atrophy(dump)
-  print("atrophy")
-  -- single parse of the incoming dump
+  -- parse of the incoming dump
   local result = parse_sysex(dump)
   if not result or type(result.data) ~= "table" then
     print("Could not read data")
@@ -936,11 +876,11 @@ function atrophy(dump)
   local data = result.data
   for i = 1, #data do
     paramA[i] = gip(data,i)
-    print(string.format("atrophy byte position: %d value: %s", i-1, tostring(paramA[i])))
+    print(string.format("atrophy byte #: %d value: %s", i, tostring(paramA[i])))
   end
   local pset = parameterMap.set
   -- assign byte values to corresponding E1 atrophy parameter values
-  local singleParams = {
+  local mappings = {
     {138, 1}, -- max speed of main mod LFO
     {267, 2},  -- max speed of performance LFO
     {521, 4},  -- Osc1 PW left trim
@@ -972,28 +912,36 @@ function atrophy(dump)
     {2054, 30},  -- VCA attack linearity
     {2055, 31},  -- VCA decay linearity
     {2053, 32},  -- VCA env chaos
+    {2176, 33},  -- per voice pan settings
+    {2177, 34},  -- per voice pan settings
+    {2178, 35},  -- per voice pan settings
+    {2179, 36},  -- per voice pan settings
+    {2180, 37},  -- per voice pan settings
+    {2181, 38},  -- per voice pan settings
+    {2182, 39},  -- per voice pan settings
+    {2183, 40},  -- per voice pan settings
+    {2184, 41},  -- per voice pan settings
+    {2185, 42},  -- per voice pan settings
+    {2186, 43},  -- per voice pan settings
+    {2187, 44},  -- per voice pan settings
+    {2188, 45},  -- per voice pan settings
+    {2189, 46},  -- per voice pan settings
+    {2190, 47},  -- per voice pan settings
+    {2191, 48},  -- per voice pan settings
   }
   -- Batch assign parameters
-  for _, pair in ipairs(singleParams) do
+  for _, pair in ipairs(mappings) do
     pset(deviceId, 3, pair[1], paramA[pair[2]])
   end
   parameterset({52,55},paramA[3])               -- OB8 Quirks (bitmasked)
-
-  -- per-voice pan/settings list: map remaining parameters to the paramlist
-  local paramlist = {2176,2177,2178,2179,2180,2181,2182,2183,2184,2185,2186,2187,2188,2189,2190,2191}
-  -- paramA indices 33..48 should map to paramlist[1..16]
-  for j = 1, #paramlist do
-    local srcIndex = 32 + j -- 33..48
-    pset(deviceId, 3, paramlist[j], paramA[srcIndex])
-  end
+  -- restore/cleanup original globals
   a_flag = false
   dump = {}
   msgNumber = 0
 end
 
 function global(dump)
-  print("global")
-  -- parse
+  -- parse of the incoming dump
   if #dump == 5 then 
     table.remove(dump,3)
     table.remove(dump,3)
@@ -1011,35 +959,35 @@ function global(dump)
   local data = result.data
   for i = 1, #data do
     local v = gip(data, i)
-    print(string.format("global byte position: %d value: %s", i-1, tostring(v)))
+    print(string.format("global byte #: %d value: %s", i, tostring(v)))
   end
   -- assign byte values to corresponding E1 global parameter values
   local mappings = {
-    {8,   2}, -- 1 is RFU
-    {9,   3},
-    {10,  4},
-    {136, 5},
-    {137, 6},
-    {904, 7}, -- 8,9,10,11 are RFU
-    {909,  12}, -- 13,14 are UI lastPatch and UIDisable bitmasked settings
-    {912,  15}, 
-    {1152, 16},
-    {1154, 17},
+    {8,   2}, -- Aftertouch level (1 is RFU)
+    {9,   3}, -- Unison note priority
+    {10,  4}, -- Chord note priority
+    {136, 5}, -- Lower pitch sensitivity
+    {137, 6}, -- Upper pitch sensitivity
+    {904, 7}, -- vintage knob (8,9,10,11 are RFU)
+    {909,  12}, -- Atrophy profile number (13,14 are bitmasked UI lastPatch and UIDisable  settings)
+    {912,  15}, -- global transpose
+    {1152, 16}, -- midi tempo
+    {1154, 17}, -- midi sync source
     {1155, 18}, -- 19-27 are MIDI settings
-    {1165, 28},
-    {1281, 29},
-    {1282, 30},
-    {1283, 31},
-    {1284, 32},
-    {1408, 33},
-    {1409, 34},
-    {1410, 35},
-    {1411, 36},
-    {1412, 37},
-    {1413, 38},
-    {1414, 39},
-    {1415, 40},
-    {1416, 41},
+    {1165, 28}, -- MPE profile
+    {1281, 29}, -- Velocity curve 
+    {1282, 30}, -- Velocity scale
+    {1283, 31}, -- Aftertouch pressure
+    {1284, 32}, -- Aftertouch curve
+    {1408, 33}, -- Sustain pedal assign
+    {1409, 34}, -- Sustain pedal action
+    {1410, 35}, -- Sustain pedal latch
+    {1411, 36}, -- Program pedal action
+    {1412, 37}, -- Program pedal action
+    {1413, 38}, -- Program pedal latch
+    {1414, 39}, -- Hold pedal assign
+    {1415, 40}, -- Hold pedal action
+    {1416, 41}, -- Hold pedal latch
     {1417, 42}, -- Vib pedal assign
     {1418, 43}, -- Vib pedal action
     {1419, 44}, -- Vib pedal min
@@ -1055,7 +1003,6 @@ function global(dump)
   for _, m in ipairs(mappings) do
     local number, pindex = m[1], m[2]
     local value = gip(data, pindex)
-    -- in case gip returns nil explicitly, we still call set to keep parity with original
 --    print(string.format("set deviceId=%s type=%d param=%d <- paramG[%d]=%s", tostring(dev), type, number, pindex, tostring(value)))
     pset(dev, 3, number, value)
   end
