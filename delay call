@@ -1,0 +1,28 @@
+
+-- 1. Initial function call that starts the delay
+function getAG(valueObject,value)
+  if value == 0 then return end
+  print("First function called immediately.")
+  step = 1
+  timer.setPeriod(2000) -- Set interval to 1000 milliseconds (1 second)
+  timer.enable()        -- Start the timer
+  print("time delay = "..timer.getPeriod())
+  print ("Requesting atrophy and global settings...");
+  local aNum = 49+(math.floor(parameterMap.get(deviceId, PT_NRPN, 909))) -- in ascii decimal
+  local message = {0x00, 0x20, 0x32, 0x00, 0x01, 0x21, 0x7F, 0x74, 0x07, 
+    0x03, 0x00, 0x42, 0x49, 0x4E, 0x20, 0x41, 0x74, 0x72, 0x6F, 0x70, 
+    0x68, 0x79, 0x58, 0x20, aNum, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20}
+    midi.sendSysex (currentPort, message)
+end
+-- 2. The tick callback that fires after the 2-second delay
+function timer.onTick()
+  if step == 1 then
+    print("Second function called after 1 second delay.")
+    local message = {0x00, 0x20, 0x32, 0x00, 0x01, 0x21, 0x7F, 0x74, 0x07, 
+    0x03, 0x00, 0x42, 0x49, 0x4E, 0x20, 0x47, 0x6C, 0x6F, 0x62, 0x61, 
+    0x6C, 0x73, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20}
+    midi.sendSysex (currentPort, message)
+    timer.disable()
+    step = 0
+  end
+end
