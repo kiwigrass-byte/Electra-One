@@ -1,0 +1,80 @@
+function unpack_midi($array) {
+    $result = [];
+
+    for ($i = 0; $i < count($array); $i += 8) {
+        $msb = $array[$i];
+
+        for ($j = 0; $j < 7; $j++) {
+            if (!isset($array[$i + $j + 1])) continue;
+
+            $byte = $array[$i + $j + 1];
+
+            if ($msb & (1 << $j)) {
+                $byte |= 0x80;
+            }
+
+            $result[] = $byte;
+        }
+    }
+
+    return $result;
+}
+
+
+
+
+function parse_sysex($messages) {
+    $header = null;
+
+    foreach ($messages as $msg) {
+
+        // HEADER
+        if ($msg[10] == 1) {
+            $idx = 12;
+
+            $type = chr($msg[$idx++]) .
+                    chr($msg[$idx++]) .
+                    chr($msg[$idx++]) .
+                    chr($msg[$idx++]);
+
+            $length =
+                ($msg[$idx++] & 0x7F) |
+                (($msg[$idx++] & 0x7F) << 7) |
+                (($msg[$idx++] & 0x7F) << 14) |
+                (($msg[$idx++] & 0x7F) << 21);
+
+            $name = "";
+            for ($i = 0; $i < 16; $i++) {
+                $name .= chr($msg[$idx++]);
+            }
+
+            $header = [
+                "name" => $name,
+                "length" => $length,
+                "type" => $type,
+                "data" => array_fill(0, $length, 0)
+            ];
+        }
+
+        // DATA PACKET
+        elseif ($msg[10] == 2 && $header) {
+            $packet_num = $msg[11];
+            $packet_len = $msg[12];
+
+            $data = array_slice($msg, 13, $packet_len + 1);
+
+            array_splice($header["data"], $packet_num * 128, $packet_len + 1, $data);
+        }
+
+        // END
+        elseif ($msg[3] == 0x7B && $header) {
+            $header["data"] = unpack_midi($header["data"]);
+            $header["data"] = array_slice($header["data"], 0, $header["length"]);
+
+            return $header;
+        }
+    }
+
+    return null;
+}
+
