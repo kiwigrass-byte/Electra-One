@@ -1,5 +1,6 @@
 -- Behringer UB-Xa
 --deviceId = 1 -- the device ID used in the E1 preset
+-- Works using USB host exclusively for MIDI I/O. More testing of other I/O needed
 local currentDevice  = devices.get(1)
 local deviceId = currentDevice:getId()
 local currentChannel = currentDevice:getChannel ()
@@ -16,7 +17,7 @@ timer.setPeriod(250)
 amountTicks = 0
 events.subscribe(POTS)
 
--- load the UB-Xa global settings into preset when the preset is first loaded and read
+-- load the UB-Xa global settings when the preset is first loaded and read
 function preset.onReady()
   getGlobals()
 end
@@ -192,7 +193,7 @@ function events.onPotTouchChange(potId, controlId, touched)
 end
 
 -------------------------------------------bitmasked parameters -------------------------------------------------------------------------------------
-local function sendNrpn(port, channel, parameter, value)
+function sendNrpn(port, channel, parameter, value)
   local pMSB = (parameter >> 7) & 0x7F
   local pLSB = parameter & 0x7F
   local vMSB = (value >> 7) & 0x7F
@@ -204,7 +205,7 @@ local function sendNrpn(port, channel, parameter, value)
 end
 
 -- bitmask helper function ---
-local function sendBitmask(paramNumber, deviceIndex, paramList)
+function sendBitmask(paramNumber, deviceIndex, paramList)
   -- paramList is a list of virtual parameter indices where LSB->first element
   local result = 0
   local dev = deviceIndex or 1
@@ -263,7 +264,7 @@ end
 
 function bitMask313() -- NRPN 3/13 = 397 EnvelopesFilterMods 
 -- Bitmask: Flip (00001) Repeat (00010) Retrig (00100) Loop (01000) Legato (10000)
-  sendBitmask(397, 1, {137,138,139,140}) 
+  sendBitmask(397, 1, {136,137,138,139,140}) 
 end
 
 function bitMask314() -- NRPN 3/14 = 398 EnvelopesLoudnessMods 
@@ -320,7 +321,7 @@ local a_flag = false   -- atrophy sequence
 ------------------------------------------------------------------------------
 -- This is lua equivalent of the php script by @Electrolove to extract the patch name from a UB-Xa patch sysEx dump
 -- Helper: safe getter that treats PHP-style 0-based indices: pass php_index (0-based)
-local function get(msg, idx0)
+function get(msg, idx0)
   -- msg is a Lua array indexed from 1..n; PHP index k => Lua index (k+1)
   return msg[idx0 + 1]
 end
@@ -328,7 +329,7 @@ end
 -- Input: array of bytes indexed 1..n (Lua-style). The PHP code processes groups of 8 bytes:
 --   msb byte followed by 7 bytes; bits in msb say whether to set top-bit (0x80) on corresponding byte.
 -- Output: array of full bytes (1..m).
-local function unpack_midi(array)
+function unpack_midi(array)
   local result = {}
   local i = 1
   while i <= #array do
@@ -354,7 +355,7 @@ end
 --  - data packet: packet_num (msg[11]), packet_len (msg[12]), then payload starting at msg[13]
 --  - end condition: PHP msg[3] == 0x7B
 -- Returns: header table { name=..., length=..., type=..., data={...} } or nil if not found
-local function parse_sysex(messages)
+function parse_sysex(messages)
   local header = nil
   for _, msg in ipairs(messages) do
     -- header message marker: PHP msg[10] -> Lua get(msg,10)
@@ -420,7 +421,7 @@ local function parse_sysex(messages)
 end
 
 -- helper function for get_patch_name
-local function trim(s) return s:match("^%s*(.-)%s*$") end
+function trim(s) return s:match("^%s*(.-)%s*$") end
 
 function get_patch_name(data)
   if type(data) ~= "table" then return "" end
@@ -532,21 +533,20 @@ function pset(params, value)
 end
 
 -- helper functions and globals for midi.onSysex 
--- per-interface sysex state
 local sysex_states = {}
 local VENDOR_ID = {0x00, 0x20, 0x32} -- Behringer
-local MODEL_BYTE = 0x3A              -- UB-Xa model identifier
+local MODEL_BYTE = 0x3A             -- UB-Xa model identifier
 local HEADER_MSG_TYPE = 1
 local PACKET_MSG_TYPE = 2
 local EOF_SYSEX_SECOND_BYTE = 0x7E
 local EOF_SYSEX_FOURTH_BYTE = 0x7B
 
-local function safe_peek(sysexBlock, length, i)
+function safe_peek(sysexBlock, length, i)
   if type(i) ~= "number" or i < 1 or i > length then return nil end
   return sysexBlock:peek(i)
 end
 
-local function peek_string(sysexBlock, length, startIndex, count)
+function peek_string(sysexBlock, length, startIndex, count)
   if startIndex < 1 or count < 1 then return "" end
   local t = {}
   for j = 0, count - 1 do
@@ -557,23 +557,19 @@ local function peek_string(sysexBlock, length, startIndex, count)
   return table.concat(t)
 end
 
-local function is_vendor_match(sysexBlock, length)
+function is_vendor_match(sysexBlock, length)
   return safe_peek(sysexBlock, length, 2) == VENDOR_ID[1]
      and safe_peek(sysexBlock, length, 3) == VENDOR_ID[2]
      and safe_peek(sysexBlock, length, 4) == VENDOR_ID[3]
 end
 
-local function reset_state_for_iface(iface)
+function reset_state_for_iface(iface)
   sysex_states[iface] = { msgNumber = 0, section = 0, dump = {}, p_flag = false, g_flag = false, a_flag = false, active = false, last_ts = nil }
 end
 
 function midi.onSysex(midiInput, sysexBlock)
   local ok, err = pcall(function()
   local length = sysexBlock:getLength()
-  if type(length) ~= "number" or length < 1 then
-    print("onSysex: invalid sysex length")
-    return
-  end
   local iface = tostring(midiInput.interface or midiInput.name or "unknown")
   local state = sysex_states[iface]
   if not state then
@@ -714,14 +710,14 @@ function patch(dump)
   local idx = 1
   for i = 1,77,2 do -- loop through the 2-byte patch parameters - parameter value is located in the 2nd byte of pair
     param2[idx] = data[i+1]
-    print("patch: 1st 2-byte parameter " .. idx .. ": " .. data[i] .. " , 2nd 2-byte parameter: ".. data[i+1])
+    print("patch: 2nd 2-byte parameter " .. idx .. ": " .. data[i+1])
 --    print(string.format("patch second 2-byte parameter: %d value: %s", idx, tostring(data[i+1])))
     idx = idx+1
   end
   local idx = 1
   for i = 95,155 do -- loop through the 1-byte parameters that start at byte 95 after the patch name bytes.  
     param1[idx] = data[i]
-    print(string.format("patch 1-byte parameter: %d value: %s", idx, tostring(param1[i-94])))
+    print("patch: 1-byte parameter: ".. idx .. ": " .. data[i])
     idx = idx + 1
   end
   -- Assign the 39 2-byte parameters. Multiple 0-255 range parameters by 64 to scale to the 0-16383 (14-bit) range of nrpn
@@ -736,13 +732,13 @@ function patch(dump)
     {4, 1},      -- unison mode toggle
     {5, 2},      -- poly voice #
     {6, 3},      -- unison voice #
-    -- {7, 4},   -- 4 ?? (skipped)
+    -- { , 4},   -- 4 ?? (skipped)
     {11, 5},     -- portamento spread
     {12, 6},     -- portamento range
     {262, 8},    -- LFO shape
     {533, 16},   -- Osc FEnv range
     {518, 18},   -- Osc1 shape
-    -- {19, 19}, -- 19 ?? (skipped)
+    -- { , 19}, -- 19 ?? (skipped)
     {519, 20},   -- Osc2 level
     {520, 21},   -- Osc2 shape
     {536, 22},   -- Osc2 quantize
@@ -773,6 +769,7 @@ function patch(dump)
     {791, 48},   -- mod dest 8
     {913, 58},   -- Atrophy preference
     {1152, 59},  -- patch midi transpose
+-- (62 is RFU)    
     {2056, 61},  -- VCA LFO Amount
   }
   -- Batch assign parameters
@@ -917,11 +914,12 @@ function global(dump)
     {137, 6}, -- Upper pitch sensitivity
     {904, 7}, -- vintage knob (8,9,10,11 are RFU)
     {909,  12}, -- Atrophy profile number 
---    (13,14 are bitmasked UI lastPatch and UIDisable  settings)
+--    (13,14 are UI lastPatch and UIDisable settings - bitmasked)
     {912,  15}, -- Atrophy mode
     {1166, 16}, -- global midi transpose
     {1154, 17}, -- global midi tempo
-    {1155, 18}, -- midi sync source (19 is song position - bitmasked)
+    {1155, 18}, -- midi sync source 
+--    (19 is song position - bitmasked)
     {1157, 20}, -- upper midi rx channel
     {1158, 21}, -- lower midi rx channel
     {1159, 22}, -- upper midi tx channel
