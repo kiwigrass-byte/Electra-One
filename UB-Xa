@@ -10,9 +10,16 @@ local upperPort      = upperDevice:getPort ()
 --lowerDevice = devices.get(3)
 --lowerChannel   = lowerDevice:getChannel ()
 local authorDate ="New Ignis 2024"
+local patchName = "No patch loaded"  -- initialize global patch name
 info.setText(authorDate)
-timer.setPeriod(1000)
+timer.setPeriod(250)
+amountTicks = 0
 events.subscribe(POTS)
+
+-- load the UB-Xa global settings into preset when the preset is first loaded and read
+function preset.onReady()
+  getGlobals()
+end
 
 function setChannel(valueObject, value) 
   -- if value ==0 then value = 3 end -- default behind the screens on Global Channel
@@ -122,7 +129,7 @@ function timer.onTick()
   amountTicks = amountTicks + 1
   if amountTicks > 4 then
     timer.disable()
-    info.setText(authorDate)
+    info.setText(patchName)
   end
 end
 
@@ -183,6 +190,7 @@ function events.onPotTouchChange(potId, controlId, touched)
     end
   end
 end
+
 -------------------------------------------bitmasked parameters -------------------------------------------------------------------------------------
 local function sendNrpn(port, channel, parameter, value)
   local pMSB = (parameter >> 7) & 0x7F
@@ -195,15 +203,13 @@ local function sendNrpn(port, channel, parameter, value)
   midi.sendControlChange(port, channel, 38, vLSB)
 end
 
--- bitmask functions ---
-local PM = parameterMap
-local PT = PT_VIRTUAL
+-- bitmask helper function ---
 local function sendBitmask(paramNumber, deviceIndex, paramList)
   -- paramList is a list of virtual parameter indices where LSB->first element
   local result = 0
   local dev = deviceIndex or 1
   for i,p in ipairs(paramList) do
-    if p and PM.get(dev, PT, p) ~= 0 then
+    if p and parameterMap.get(dev, PT_VIRTUAL, p) ~= 0 then
       result = result + (1 << (i-1))
     end
   end
@@ -313,106 +319,107 @@ local a_flag = false   -- atrophy sequence
 
 ------------------------------------------------------------------------------
 -- This is lua equivalent of the php script by @Electrolove to extract the patch name from a UB-Xa patch sysEx dump
--- It uses 3 function: unpack_midi, parse_sysex, get_patch_name
-
--- Unpack MIDI-style packed bytes (optimized for Lua 5.3)
--- Input layout: [MSB, b1, b2, b3, b4, b5, b6, b7, MSB2, ...]
--- MSB bit j (0..6) indicates that byte b{j+1} should have its high bit (0x80) set.
--- Returns: flat array of unpacked bytes.
+-- Helper: safe getter that treats PHP-style 0-based indices: pass php_index (0-based)
+local function get(msg, idx0)
+  -- msg is a Lua array indexed from 1..n; PHP index k => Lua index (k+1)
+  return msg[idx0 + 1]
+end
+-- Unpack MIDI 7-bit-packed data.
+-- Input: array of bytes indexed 1..n (Lua-style). The PHP code processes groups of 8 bytes:
+--   msb byte followed by 7 bytes; bits in msb say whether to set top-bit (0x80) on corresponding byte.
+-- Output: array of full bytes (1..m).
 local function unpack_midi(array)
-  if type(array) ~= "table" then
-    error("unpack_midi: expected table, got " .. type(array), 2)
-  end
-  local n = #array
   local result = {}
-  local ri = 1
-  -- step through groups of 8: msb + up to 7 bytes
-  for i = 1, n, 8 do
-    local msb = array[i]
-    if not msb then break end
-    -- process up to 7 following bytes
+  local i = 1
+  while i <= #array do
+    local msb = array[i] or 0
     for j = 0, 6 do
       local idx = i + j + 1
-      if idx > n then break end
-      local byte = array[idx]
-      if (msb & (1 << j)) ~= 0 then byte = byte | 0x80 end
-      result[ri] = byte
-      ri = ri + 1
+      local b = array[idx]
+      if b ~= nil then
+        if (msb & (1 << j)) ~= 0 then
+          b = b | 0x80
+        end
+        result[#result + 1] = b
+      end
     end
+    i = i + 8
   end
   return result
 end
-
-function parse_sysex(messages)
-  local string_char = string.char
-  local table_concat = table.concat
-  local unpack_midi_local = unpack_midi -- keep the external function lookup local
+-- Parse a sequence of "messages" (each message is a numeric byte array, 1..n).
+-- Mirrors the PHP parse_sysex behavior:
+--  - message byte at PHP index 10 indicates type: 1 = header, 2 = data packet
+--  - header message: reads type (4 chars), length (4x7bit little-endian), name (16 chars)
+--  - data packet: packet_num (msg[11]), packet_len (msg[12]), then payload starting at msg[13]
+--  - end condition: PHP msg[3] == 0x7B
+-- Returns: header table { name=..., length=..., type=..., data={...} } or nil if not found
+local function parse_sysex(messages)
   local header = nil
-  for mi = 1, #messages do
-    local msg = messages[mi]
-    if not msg then break end
-    -- HEADER (marker value in msg[11] == 1)
-    if msg[11] == 1 then
-      local idx = 13
-      -- safe access to the four type bytes
-      local t1, t2, t3, t4 = msg[idx], msg[idx+1], msg[idx+2], msg[idx+3]
-      local typ = string_char(t1 or 0, t2 or 0, t3 or 0, t4 or 0)
-      idx = idx + 4
-      -- safe 7-bit little-endian length unpack
-      local b1 = msg[idx] or 0
-      local b2 = msg[idx+1] or 0
-      local b3 = msg[idx+2] or 0
-      local b4 = msg[idx+3] or 0
-      local length = (b1 & 0x7F) | ((b2 & 0x7F) << 7) | ((b3 & 0x7F) << 14) | ((b4 & 0x7F) << 21)
-      idx = idx + 4
-      -- read 16-byte name efficiently
-      local name_parts = {}
-      for i = 1, 16 do
-        name_parts[i] = string_char(msg[idx] or 0)
-        idx = idx + 1
+  for _, msg in ipairs(messages) do
+    -- header message marker: PHP msg[10] -> Lua get(msg,10)
+    if get(msg, 10) == 1 then
+      local idx = 12  -- PHP-style index (0-based) used in original code
+      -- read 4-character type
+      local t = string.char(get(msg, idx) or 0)
+      idx = idx + 1
+      t = t .. string.char(get(msg, idx) or 0); idx = idx + 1
+      t = t .. string.char(get(msg, idx) or 0); idx = idx + 1
+      t = t .. string.char(get(msg, idx) or 0); idx = idx + 1
+      -- read 4-byte length stored as 4 x 7-bit little-endian pieces (mask with 0x7F)
+      local b0 = (get(msg, idx) or 0) & 0x7F; idx = idx + 1
+      local b1 = (get(msg, idx) or 0) & 0x7F; idx = idx + 1
+      local b2 = (get(msg, idx) or 0) & 0x7F; idx = idx + 1
+      local b3 = (get(msg, idx) or 0) & 0x7F; idx = idx + 1
+      local length = b0 | (b1 << 7) | (b2 << 14) | (b3 << 21)
+      -- read 16-byte name
+      local name = ""
+      for i = 0, 15 do
+        name = name .. string.char(get(msg, idx + i) or 0)
       end
-      local name = table_concat(name_parts)
-      -- initialize data array with zeros (1..length)
-      local data_array = {}
-      for i = 1, length do data_array[i] = 0 end
-      header = { name = name, length = length, type = typ, data = data_array }
-    -- DATA PACKET (marker value in msg[11] == 2)
-    elseif msg[11] == 2 and header then
-      local packet_num = msg[12] or 0
-      local packet_len = msg[13] or 0
-      if packet_len > 0 then
-        local start_idx = 14
-        local end_idx = start_idx + packet_len - 1 -- corrected off-by-one
-        local target_idx = (packet_num * 128) + 1
-        -- copy available bytes into header.data, but don't write past header.length
-        for i = start_idx, end_idx do
-          local byte = msg[i]
-          if not byte then break end
-          if target_idx <= header.length then
-            header.data[target_idx] = byte
-          else
-            -- if packet writes past expected length, stop writing
-            break
-          end
-          target_idx = target_idx + 1
-        end
+      idx = idx + 16
+      -- initialize header and its data buffer (1-based Lua indices)
+      header = {
+        name = name,
+        length = length,
+        type = t,
+        data = {}
+      }
+      -- initialize data with zeros (mirrors PHP array_fill(0, $length, 0))
+      for i = 1, length do header.data[i] = 0 end
+    -- data packet: PHP msg[10] == 2
+    elseif get(msg, 10) == 2 and header ~= nil then
+      local packet_num = get(msg, 11) or 0
+      local packet_len = get(msg, 12) or 0
+      -- PHP: $data = array_slice($msg, 13, $packet_len + 1)
+      -- packet data are PHP indices 13 .. 13+packet_len (0-based)
+      local data = {}
+      for k = 0, packet_len do
+        data[#data + 1] = get(msg, 13 + k) or 0
       end
-    -- END (use msg[4] == 0x7B as end marker)
-    elseif msg[4] == 0x7B and header then
-      -- call unpack_midi and then ensure table is exactly header.length long
-      header.data = unpack_midi_local(header.data)
-      if #header.data > header.length then
-        -- trim extra elements in-place to avoid allocating a new table
-        for i = header.length + 1, #header.data do
-          header.data[i] = nil
-        end
+      -- PHP array_splice(.., $packet_num * 128, $packet_len + 1, $data)
+      -- so destination start is PHP index (packet_num * 128) -> Lua index +1
+      local dest_start = packet_num * 128 + 1
+      for k = 1, #data do
+        header.data[dest_start + k - 1] = data[k]
       end
+    -- end marker: PHP msg[3] == 0x7B
+    elseif get(msg, 3) == 0x7B and header ~= nil then
+      -- unpack the 7bit-packed MIDI data
+      header.data = unpack_midi(header.data)
+      -- trim to header.length (PHP array_slice(..., 0, $header['length']))
+      local trimmed = {}
+      for i = 1, math.min(#header.data, header.length) do
+        trimmed[i] = header.data[i]
+      end
+      header.data = trimmed
       return header
     end
   end
   return nil
 end
 
+-- helper function for get_patch_name
 local function trim(s) return s:match("^%s*(.-)%s*$") end
 
 function get_patch_name(data)
@@ -433,56 +440,44 @@ function get_patch_name(data)
   return trim(table.concat(nameChars))
 end
 
-function get_2byte_parameter(data,idx)
-  if data[idx+1] == nil then return end
-  -- data[i] is the first byte, data[i+1] is the second byte
-  -- the parameter value is the unpacked second byte
-  return math.floor(data[idx+1])
-end
-
-function get_1byte_parameter(data,idx)
-  if data[idx] == nil then return end
-  -- the parameter value is the unpacked first byte
-  return math.floor(data[idx])
-end
-
-function get_nibble(data,idx)
-  local byte = data[idx]
-  -- Shift right by 4 bits to get the upper 4 bits
-  local high_nibble = byte >> 4
-  -- Mask with 0x0F (binary 00001111) to get the lower 4 bits
-  local low_nibble = byte & 0x0F
-  print(string.format("High: %X, Low: %X", high_nibble, low_nibble))
-end
-
 -- Functions to make requests to UB-Xa--------------------------------------
 function getCurrentProgram(valueObject, value)
   if value == 0 then return end
-  local message = {0x00, 0x20, 0x32, 0x00, 0x01, 0x21, 0x7F, 0x74, 0x07, 0x03, 0x00, 0x42, 0x49, 0x4E, 0x20, 0x43, 0x75, 0x72, 0x72, 0x65, 0x6E, 0x74, 0x20, 0x50, 0x72, 0x6F, 0x67, 0x72, 0x61, 0x6D, 0x20}
+  local message = {0x00, 0x20, 0x32, 0x00, 0x01, 0x21, 0x7F, 0x74, 0x07, 
+  0x03, 0x00, 0x42, 0x49, 0x4E, 0x20, 0x43, 0x75, 0x72, 0x72, 0x65, 
+  0x6E, 0x74, 0x20, 0x50, 0x72, 0x6F, 0x67, 0x72, 0x61, 0x6D, 0x20}
   midi.sendSysex (currentPort, message)
 end
 
 function getUpperPatch(valueObject, value)
   if value == 0 then return end
-  local message = {0x00, 0x20, 0x32, 0x00, 0x01, 0x21, 0x7F, 0x74, 0x07, 0x03, 0x00, 0x42, 0x49, 0x4E, 0x20, 0x55, 0x70, 0x70, 0x65, 0x72, 0x20, 0x50, 0x61, 0x74, 0x63, 0x68, 0x20, 0x20, 0x20, 0x20, 0x20}
+  local message = {0x00, 0x20, 0x32, 0x00, 0x01, 0x21, 0x7F, 0x74, 0x07, 
+  0x03, 0x00, 0x42, 0x49, 0x4E, 0x20, 0x55, 0x70, 0x70, 0x65, 0x72, 
+  0x20, 0x50, 0x61, 0x74, 0x63, 0x68, 0x20, 0x20, 0x20, 0x20, 0x20}
   midi.sendSysex (currentPort, message)
 end
 
 function getLowerPatch(valueObject, value)
   if value == 0 then return end
-  local message = {0x00, 0x20, 0x32, 0x00, 0x01, 0x21, 0x7F, 0x74, 0x07, 0x03, 0x00, 0x42, 0x49, 0x4E, 0x20, 0x4C, 0x6F, 0x77, 0x65, 0x72, 0x20, 0x50, 0x61, 0x74, 0x63, 0x68, 0x20, 0x20, 0x20, 0x20, 0x20}
+  local message = {0x00, 0x20, 0x32, 0x00, 0x01, 0x21, 0x7F, 0x74, 0x07, 
+  0x03, 0x00, 0x42, 0x49, 0x4E, 0x20, 0x4C, 0x6F, 0x77, 0x65, 0x72, 
+  0x20, 0x50, 0x61, 0x74, 0x63, 0x68, 0x20, 0x20, 0x20, 0x20, 0x20}
   midi.sendSysex (currentPort, message)
 end
 
 function getGlobals(valueObject, value)
   if value == 0 then return end
-  local message = {0x00, 0x20, 0x32, 0x00, 0x01, 0x21, 0x7F, 0x74, 0x07, 0x03, 0x00, 0x42, 0x49, 0x4E, 0x20, 0x47, 0x6C, 0x6F, 0x62, 0x61, 0x6C, 0x73, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20}
+  local message = {0x00, 0x20, 0x32, 0x00, 0x01, 0x21, 0x7F, 0x74, 0x07, 
+    0x03, 0x00, 0x42, 0x49, 0x4E, 0x20, 0x47, 0x6C, 0x6F, 0x62, 0x61, 
+    0x6C, 0x73, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20}
   midi.sendSysex (currentPort, message)
 end
 
 function getSplitDouble(valueObject, value)
   if value == 0 then return end
-  local message = {0x00, 0x20, 0x32, 0x00, 0x01, 0x21, 0x7F, 0x74, 0x07, 0x03, 0x00, 0x42, 0x49, 0x4E, 0x20, 0x53, 0x70, 0x6C, 0x69, 0x74, 0x20, 0x44, 0x6F, 0x75, 0x62, 0x6C, 0x65, 0x20, 0x20, 0x20, 0x20}
+  local message = {0x00, 0x20, 0x32, 0x00, 0x01, 0x21, 0x7F, 0x74, 0x07, 
+  0x03, 0x00, 0x42, 0x49, 0x4E, 0x20, 0x53, 0x70, 0x6C, 0x69, 0x74, 
+  0x20, 0x44, 0x6F, 0x75, 0x62, 0x6C, 0x65, 0x20, 0x20, 0x20, 0x20}
   midi.sendSysex (currentPort, message)
 end
 
@@ -496,46 +491,27 @@ function getAtrophy(valueObject, value)
 end
 
 -- helper function to extract ascii bytes from a number
-local function asciiBytesFromNumber(n, width)
+function asciiBytesFromNumber(n, width)
   local s = string.format("%0"..tostring(width).."d", n)
   local bytes = {}
   for i=1,#s do bytes[#bytes+1] = string.byte(s,i) end
   return bytes
 end
-
+-- request patchX Bank###
 function getPatch(valueObject, value)
   if value == 0 then return end
-  local bank = parameterMap.get(deviceId, PT_VIRTUAL, 10008)
-  local raw  = parameterMap.get(deviceId, PT_VIRTUAL, 10009)
-  if not bank or not raw then return end
-  local number = math.floor(raw / 100)
-  number = math.max(0, math.min(999, number))
+  local bank = parameterMap.get(deviceId, PT_VIRTUAL, 6032) + 65
+  local number  = parameterMap.get(deviceId, PT_VIRTUAL, 6033)
   local digits = asciiBytesFromNumber(number, 3)
   local message = {
     0x00,0x20,0x32,0x00,0x01,0x21,0x7F,0x74,0x07,0x03,0x00,
     0x42,0x49,0x4E,0x20,0x50,0x61,0x74,0x63,0x68,0x58,0x20,
-    bank, digits[1], digits[2], digits[3], 0x20,0x20,0x20, 0xF7
-  }
-  midi.sendSysex(currentPort, message)
-end
-
-function getAtrophyGlobals(valueObject,value)
-  if value == 0 then return end
-  print ("Requesting atrophy and global settings...");
-  local aNum = 49+(math.floor(parameterMap.get(deviceId, PT_NRPN, 909))) -- in ascii decimal
-  local message = {0x00, 0x20, 0x32, 0x00, 0x01, 0x21, 0x7F, 0x74, 0x07, 
-    0x03, 0x00, 0x42, 0x49, 0x4E, 0x20, 0x41, 0x74, 0x72, 0x6F, 0x70, 
-    0x68, 0x79, 0x58, 0x20, aNum, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20}
-    midi.sendSysex (currentPort, message)
-
-  local message = {0x00, 0x20, 0x32, 0x00, 0x01, 0x21, 0x7F, 0x74, 0x07, 
-    0x03, 0x00, 0x42, 0x49, 0x4E, 0x20, 0x47, 0x6C, 0x6F, 0x62, 0x61, 
-    0x6C, 0x73, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20}
+    bank, digits[1], digits[2], digits[3], 0x20,0x20,0x20}
   midi.sendSysex (currentPort, message)
 end
 
--- parse an x bit bitmask to a virtual parameter with values 0..2^x-1
-function parameterset(params, value)
+-- helper function to parse an x bit bitmask to a virtual parameter with values 0..2^x-1
+function pset(params, value)
   local x = #params
   -- coerce to integer and keep only the lowest x bits (values: 0..2^x-1)
   local v = math.floor(tonumber(value) or 0) & (2^x - 1)
@@ -555,6 +531,7 @@ function parameterset(params, value)
   end
 end
 
+-- helper functions and globals for midi.onSysex 
 -- per-interface sysex state
 local sysex_states = {}
 local VENDOR_ID = {0x00, 0x20, 0x32} -- Behringer
@@ -592,32 +569,18 @@ end
 
 function midi.onSysex(midiInput, sysexBlock)
   local ok, err = pcall(function()
-  -- basic validation
-  if not midiInput or not sysexBlock then
-    print("onSysex: missing midiInput or sysexBlock")
-    return
-  end
-  if type(sysexBlock.getLength) ~= "function"
-  or type(sysexBlock.peek) ~= "function" then
-    print("onSysex: sysexBlock lacks required methods")
-    return
-  end
-
   local length = sysexBlock:getLength()
   if type(length) ~= "number" or length < 1 then
     print("onSysex: invalid sysex length")
     return
   end
-
   local iface = tostring(midiInput.interface or midiInput.name or "unknown")
   local state = sysex_states[iface]
   if not state then
     reset_state_for_iface(iface)
     state = sysex_states[iface]
   end
-
   local peek = function(i) return safe_peek(sysexBlock, length, i) end
-
   -- If starting a new transfer, reset dump
   if state.msgNumber == 0 then
     state.dump = {}
@@ -626,10 +589,13 @@ function midi.onSysex(midiInput, sysexBlock)
     state.g_flag = false
     state.a_flag = false
   end
-
-  -- Header detection:
-  if length > 6 and peek(11) == HEADER_MSG_TYPE then
-    print("atrophy")
+  -- HEADER detection:
+  if length > 6 and peek(11) == HEADER_MSG_TYPE then -- header seen. decide whether it's a new transfer or a bona fide additional header. 
+    local expected_header_msgnum = 1 + (state.section or 0) * 2 
+    if state.msgNumber ~= 0 and state.msgNumber ~= expected_header_msgnum then -- We're in the middle of a transfer but this header is NOT the expected header for that transfer.  
+      print("onSysex: unexpected header while msgNumber=" .. tostring(state.msgNumber) .. "; resetting state and starting new transfer") 
+      reset_state_for_iface(iface) state = sysex_states[iface] -- Treat it as the start of a new transfer to avoid appending onto a corrupted/partial dump.
+    end
     if state.msgNumber == 0 then
       -- start of first header
       state.section = 0
@@ -651,6 +617,8 @@ function midi.onSysex(midiInput, sysexBlock)
       local tl = hdrText:lower()
       if tl:find("upper patch", 1, true) then
         state.p_flag, state.g_flag, state.a_flag = true, false, false
+      elseif tl:find("patchx", 1, true) then
+        state.p_flag, state.g_flag, state.a_flag = true, false, false
       elseif tl:find("global", 1, true) then
         state.g_flag, state.p_flag, state.a_flag = true, false, false
       elseif tl:find("atrophy", 1, true) then
@@ -663,19 +631,15 @@ function midi.onSysex(midiInput, sysexBlock)
       -- do NOT reset flags: dump type determined by first header
     end
   end
-  -- Packet detection: compute packet msgNumber relative to current section
+  -- PACKET detection: compute packet msgNumber relative to current section. There is 7 packets for a patch dump, 1 for a global, 1 for atrophy profile
   for i = 0, 6 do
     if length > 6 and peek(11) == PACKET_MSG_TYPE and peek(12) == i then
       state.msgNumber = i + 2 + (state.section or 0) * 2
     end
   end
-  -- patch fallback if we've seen 8 packets and 8th is correct length overall.  Need this because patch request is not working yet
---  if state.msgNumber == 8 and length == 95 then state.p_flag = true end
-
   -- EOF detection
   local secondByte = peek(2)
   local fourthByte = peek(4)
-
   if length == 6 and secondByte == EOF_SYSEX_SECOND_BYTE and fourthByte == EOF_SYSEX_FOURTH_BYTE then
     if state.p_flag then
       state.msgNumber = 9
@@ -685,7 +649,6 @@ function midi.onSysex(midiInput, sysexBlock)
       state.msgNumber = 3
     end
   end
-
   -- Logging
   print(string.format("sysex (msg=%d) message received: interface=%s length=%d",
     state.msgNumber, iface, length))
@@ -698,7 +661,6 @@ function midi.onSysex(midiInput, sysexBlock)
     end
     print(string.format("data[%04X]: %s", startIndex - 1, table.concat(bytes, " ")))
   end
-
   -- collect each message into dump
   local temp = {}
   for i = 1, length do
@@ -707,7 +669,6 @@ function midi.onSysex(midiInput, sysexBlock)
     temp[i] = b
   end
   table.insert(state.dump, temp)
-
   -- call the appropriate handler on EOF for each type
   if state.p_flag and state.msgNumber == 9 then
     if type(patch) == "function" then pcall(patch, state.dump) else print("onSysex: patch() not available") end
@@ -723,7 +684,6 @@ function midi.onSysex(midiInput, sysexBlock)
     reset_state_for_iface(iface)
     return
   end
-
   -- advance message number for next call
   if type(state.msgNumber) == "number" then
     state.msgNumber = state.msgNumber + 1
@@ -748,29 +708,28 @@ function patch(dump)
   local param2 = {}  -- store 2 byte parameters
   local param1 = {}  -- store 1 byte parameters
   local data = result.data
-  local gip  = get_1byte_parameter
-  local gup  = get_2byte_parameter
-  -- print patch name
-  local patchName = get_patch_name(data)
+  -- print patch name to screen
+  patchName = get_patch_name(data) -- update global patchName
   info.setText(patchName)
   local idx = 1
-  for i = 1,77,2 do -- loop through the 2-byte patch parameters
-    param2[idx] = gup(data,i)
---    print("2-byte Parameter: " .. idx .. " value: " ..param2[idx] )
+  for i = 1,77,2 do -- loop through the 2-byte patch parameters - parameter value is located in the 2nd byte of pair
+    param2[idx] = data[i+1]
+    print("patch: 1st 2-byte parameter " .. idx .. ": " .. data[i] .. " , 2nd 2-byte parameter: ".. data[i+1])
+--    print(string.format("patch second 2-byte parameter: %d value: %s", idx, tostring(data[i+1])))
     idx = idx+1
   end
   local idx = 1
-  for i = 95,155 do -- loop through the 1-byte parameters.  
-    param1[idx] = gip(result.data,i)
+  for i = 95,155 do -- loop through the 1-byte parameters that start at byte 95 after the patch name bytes.  
+    param1[idx] = data[i]
     print(string.format("patch 1-byte parameter: %d value: %s", idx, tostring(param1[i-94])))
     idx = idx + 1
   end
-  -- assign the 39 2 byte parameters (multiple 0-255 range parameters by 64 to scale to 0-16383 range of nrpn)
-  -- see manual for nrpn numbers 
-  local pset = parameterMap.set
+  -- Assign the 39 2-byte parameters. Multiple 0-255 range parameters by 64 to scale to the 0-16383 (14-bit) range of nrpn
+  -- The result doesn't match exactly the UB-Xa because the range of a 2-byte parameter is actually 0-65535 (16-bit)
+  -- See manual for description of the nrpn 
   local paramList = {0,1,2,3,128,256,257,258,259,260,384,385,386,387,388,389,390,391,392,393,394,395,396,512,513,514,515,640,641,642,643,768,770,772,774,769,771,773,775}
   for i = 1,39 do
-    pset (deviceId, 3, paramList[i], param2[i]*64) 
+    parameterMap.set (deviceId, 3, paramList[i], param2[i]*64) 
   end
   -- Assign the 1-byte parameters to E1 patch parameters. Some are bitmasked and treated separately.
   local singleParams = {
@@ -783,7 +742,7 @@ function patch(dump)
     {262, 8},    -- LFO shape
     {533, 16},   -- Osc FEnv range
     {518, 18},   -- Osc1 shape
-    -- {19, 19}, -- 19? (skipped)
+    -- {19, 19}, -- 19 ?? (skipped)
     {519, 20},   -- Osc2 level
     {520, 21},   -- Osc2 shape
     {536, 22},   -- Osc2 quantize
@@ -813,12 +772,12 @@ function patch(dump)
     {790, 47},   -- mod source 8
     {791, 48},   -- mod dest 8
     {913, 58},   -- Atrophy preference
-    {1152, 59},  -- Transpose keyboard
+    {1152, 59},  -- patch midi transpose
     {2056, 61},  -- VCA LFO Amount
   }
   -- Batch assign parameters
   for _, pair in ipairs(singleParams) do
-    pset(deviceId, 3, pair[1], param1[pair[2]])
+    parameterMap.set(deviceId, 3, pair[1], param1[pair[2]])
   end
 
   -- Assign multi-parameter (bit masked) groups
@@ -835,7 +794,7 @@ function patch(dump)
     {27, {76,89}},                      -- Filter key track and mode
   }
   for _, group in ipairs(paramGroups) do
-    parameterset(group[2], param1[group[1]])
+    pset(group[2], param1[group[1]])
   end
 
   -- Assign ARP parameters to upperDevice
@@ -849,7 +808,7 @@ function patch(dump)
     {1030, 55},  -- ARP octave range
   }
   for _, pair in ipairs(arpParams) do
-    pset(upperDevice:getId(), 3, pair[1], param1[pair[2]])
+    parameterMap.set(upperDevice:getId(), 3, pair[1], param1[pair[2]])
   end
   -- restore/cleanup original globals
   p_flag = false
@@ -857,51 +816,18 @@ function patch(dump)
   msgNumber = 0
 end
 
-local function hex_range(msg, fromIdx, toIdx)
-  local parts = {}
-  for i = fromIdx, toIdx do parts[#parts+1] = msg[i] or 0 end
-  return table.insert(parts)
-end
-
-local function bytes_to_printable_string(msg, fromIdx, toIdx)
-  if type(msg) ~= "table" then return "" end
-  local out = {}
-  for i = fromIdx, toIdx do
-    local b = msg[i] or 0
-    if b == 0 then
-      -- skip or out[#out+1] = " "  -- choose skip or convert to space
-    elseif b >= 32 and b <= 126 then
-      out[#out+1] = string.char(b)
-    else
-      out[#out+1] = "?"
-    end
-  end
-  return out
-end
-
 function atrophy(dump)
-  --print atrophy profile name
-  local out = bytes_to_printable_string(dump[2], 69, 75)
-  local s = table.concat(out)
-  local name = (s:match("^%s*(.-)%s*$") or "")
-  print("atrophy name (clean):"..name)
-  for j = 1,6 do
-    parameterMap.set(deviceId, 0, 15000+j-1, string.byte(out[j]))
-  end
   -- parse of the incoming dump
   local result = parse_sysex(dump)
   if not result or type(result.data) ~= "table" then
     print("Could not read data")
     return
   end
-  local paramA = {}  -- store 1 byte parameters
-  local gip  = get_1byte_parameter
+  local dev = deviceId
   local data = result.data
   for i = 1, #data do
-    paramA[i] = gip(data,i)
-    print(string.format("atrophy byte #: %d value: %s", i, tostring(paramA[i])))
+    print(string.format("atrophy byte #: %d value: %s", i, tostring(data[i])))
   end
-  local pset = parameterMap.set
   -- assign byte values to corresponding E1 atrophy parameter values
   local mappings = {
     {138, 1}, -- max speed of main mod LFO
@@ -935,28 +861,34 @@ function atrophy(dump)
     {2054, 30},  -- VCA attack linearity
     {2055, 31},  -- VCA decay linearity
     {2053, 32},  -- VCA env chaos
-    {2176, 33},  -- per voice pan settings
-    {2177, 34},  -- per voice pan settings
-    {2178, 35},  -- per voice pan settings
-    {2179, 36},  -- per voice pan settings
-    {2180, 37},  -- per voice pan settings
-    {2181, 38},  -- per voice pan settings
-    {2182, 39},  -- per voice pan settings
-    {2183, 40},  -- per voice pan settings
-    {2184, 41},  -- per voice pan settings
-    {2185, 42},  -- per voice pan settings
-    {2186, 43},  -- per voice pan settings
-    {2187, 44},  -- per voice pan settings
-    {2188, 45},  -- per voice pan settings
-    {2189, 46},  -- per voice pan settings
-    {2190, 47},  -- per voice pan settings
-    {2191, 48},  -- per voice pan settings
+    {2176, 33},  -- per voice pan settings - 01
+    {2177, 34},  -- per voice pan settings - 02
+    {2178, 35},  -- per voice pan settings - 03
+    {2179, 36},  -- per voice pan settings - 04
+    {2180, 37},  -- per voice pan settings - 05
+    {2181, 38},  -- per voice pan settings - 06
+    {2182, 39},  -- per voice pan settings - 07
+    {2183, 40},  -- per voice pan settings - 08
+    {2184, 41},  -- per voice pan settings - 09
+    {2185, 42},  -- per voice pan settings - 10
+    {2186, 43},  -- per voice pan settings - 11
+    {2187, 44},  -- per voice pan settings - 12
+    {2188, 45},  -- per voice pan settings - 13
+    {2189, 46},  -- per voice pan settings - 14
+    {2190, 47},  -- per voice pan settings - 15
+    {2191, 48},  -- per voice pan settings - 16
+    {2304, 49},  -- Atrophy profile name character 1
+    {2305, 50},  -- Atrophy profile name character 2
+    {2306, 51},  -- Atrophy profile name character 3
+    {2307, 52},  -- Atrophy profile name character 4
+    {2308, 53},  -- Atrophy profile name character 5
+    {2309, 54},  -- Atrophy profile name character 6
   }
   -- Batch assign parameters
   for _, pair in ipairs(mappings) do
-    pset(deviceId, 3, pair[1], paramA[pair[2]])
+    parameterMap.set(dev, 3, pair[1], data[pair[2]])
   end
-  parameterset({52,55},paramA[3])               -- OB8 Quirks (bitmasked)
+  pset({52,55},data[3])               -- OB8 Quirks (bitmasked)
   -- restore/cleanup original globals
   a_flag = false
   dump = {}
@@ -965,11 +897,6 @@ end
 
 function global(dump)
   -- parse of the incoming dump
-  if #dump == 5 then 
-    table.remove(dump,3)
-    table.remove(dump,3)
-    print("global dump has 5 messages")
-  end
   local result = parse_sysex(dump)
   if not result or type(result.data) ~= "table" then
     print("Could not read data")
@@ -977,12 +904,9 @@ function global(dump)
   end
   -- cache globals/functions for speed
   local dev = deviceId
-  local pset = parameterMap.set
-  local gip  = get_1byte_parameter
   local data = result.data
   for i = 1, #data do
-    local v = gip(data, i)
-    print(string.format("global byte #: %d value: %s", i, tostring(v)))
+    print(string.format("global byte #: %d value: %s", i, tostring(data[i])))
   end
   -- assign byte values to corresponding E1 global parameter values
   local mappings = {
@@ -992,15 +916,17 @@ function global(dump)
     {136, 5}, -- Lower pitch sensitivity
     {137, 6}, -- Upper pitch sensitivity
     {904, 7}, -- vintage knob (8,9,10,11 are RFU)
-    {909,  12}, -- Atrophy profile number (13,14 are bitmasked UI lastPatch and UIDisable  settings)
+    {909,  12}, -- Atrophy profile number 
+--    (13,14 are bitmasked UI lastPatch and UIDisable  settings)
     {912,  15}, -- Atrophy mode
-    {1166, 16}, -- global transpose
-    {1154, 17}, -- midi tempo 
+    {1166, 16}, -- global midi transpose
+    {1154, 17}, -- global midi tempo
     {1155, 18}, -- midi sync source (19 is song position - bitmasked)
     {1157, 20}, -- upper midi rx channel
     {1158, 21}, -- lower midi rx channel
     {1159, 22}, -- upper midi tx channel
-    {1160, 23}, -- lower midi tx channel (24-27 are othe rmidi settings - bitmasked)
+    {1160, 23}, -- lower midi tx channel 
+--    (24-27 are other midi settings - bitmasked)
     {1165, 28}, -- MPE profile
     {1281, 29}, -- Velocity curve 
     {1282, 30}, -- Velocity scale
@@ -1025,13 +951,21 @@ function global(dump)
     {1424, 49}, -- Filter pedal max (50 is performance panel options - bitmasked)
     {1664, 53}, -- turn voices 1-8 on/off
     {1665, 54}, -- turn voices 9-16 on/off
+    {1666, 55}, -- turn pwm calib 1-8 on/off
+    {1667, 56}, -- turn pwm calib 9-16 on/off
+    {1668, 57}, -- turn vco calib 1-8 on/off
+    {1669, 58}, -- turn vco calib 9-16 on/off
+    {1670, 59}, -- turn vcf calib 1-8 on/off
+    {1671, 60}, -- turn vcf calib 9-16 on/off
+--    {,61} -- RFU (0-32)
+    {1793, 62}, -- Display contrast
+    {1794, 63}, -- Lever settings
+    {1795, 64}, -- Fan
+    {1920, 65}, -- Background calibration settings
   }
-  -- apply mappings
-  for _, m in ipairs(mappings) do
-    local number, pindex = m[1], m[2]
-    local value = gip(data, pindex)
---    print(string.format("set deviceId=%s type=%d param=%d <- paramG[%d]=%s", tostring(dev), type, number, pindex, tostring(value)))
-    pset(dev, 3, number, value)
+  -- Batch assign parameters
+  for _, pair in ipairs(mappings) do
+    parameterMap.set(dev, 3, pair[1], data[pair[2]])
   end
   -- restore/cleanup original globals
   g_flag = false
