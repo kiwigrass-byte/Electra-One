@@ -13,19 +13,23 @@ local upperChannel   = upperDevice:getChannel ()
 local upperPort      = upperDevice:getPort ()
 
 local suppressOutputs = true
-local pendingSets = {} 
-local orig_parameterMap_set = parameterMap.set 
-parameterMap.set = function(dev, pt, p, v) 
-  if suppressOutputs then pendingSets[#pendingSets + 1] = {dev, pt, p, v} return end 
-  return orig_parameterMap_set(dev, pt, p, v) 
+local orig_midi_sendControlChange = midi.sendControlChange 
+local orig_midi_sendProgramChange = midi.sendProgramChange 
+local orig_midi_sendStart = midi.sendStart 
+local orig_midi_sendStop = midi.sendStop
+
+local function silenceMidiOutputs() -- Silence the runtime calls that emit NRPN/CC and program/start/stop 
+  midi.sendControlChange = function(...) end 
+  midi.sendProgramChange = function(...) end 
+  midi.sendStart = function(...) end 
+  midi.sendStop = function(...) end 
 end
-local function flushPendingSets() 
-  if #pendingSets == 0 then return end 
-  for _, entry in ipairs(pendingSets) do 
-    local dev, pt, p, v = entry[1], entry[2], entry[3], entry[4] 
-    orig_parameterMap_set(dev, pt, p, v) 
-  end 
-  pendingSets = {} 
+
+local function restoreMidiOutputs() 
+  midi.sendControlChange = orig_midi_sendControlChange 
+  midi.sendProgramChange = orig_midi_sendProgramChange 
+  midi.sendStart = orig_midi_sendStart 
+  midi.sendStop = orig_midi_sendStop 
 end
 
 local authorDate ="New Ignis 2024"
@@ -169,7 +173,7 @@ function timer.onTick()
   if amountTicks > 4 then
     timer.disable()
     suppressOutputs = false -- allow NRPNs to be sent after init 
-    flushPendingSets() 
+    restoreMidiOutputs() -- allow the runtime to send again 
     info.setText(patchName)
   end
 end
