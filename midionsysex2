@@ -46,7 +46,7 @@ function is_vendor_match(sysexBlock, length)
 end
 
 function detect_dump_type(sysexBlock, length)
-  local hdrText = peek_string(sysexBlock, length, 21, 12):lower()
+  local hdrText = peek_string(sysexBlock, length, 21, 16):lower()
   
   if hdrText:find("upper patch", 1, true) or hdrText:find("lower patch", 1, true) or hdrText:find("patchx", 1, true) then
     return DUMP_TYPES.PATCH
