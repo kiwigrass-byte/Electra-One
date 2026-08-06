@@ -16,12 +16,12 @@ local DUMP_TYPES = {
   SPLIT_DOUBLE = "splitDouble"
 }
 
--- Handler mapping: dumpType -> {endMsgNum, handler}
+-- Handler mapping: dumpType -> {endMsgNum, handlerName}
 local HANDLERS = {
-  patch = { endMsgNum = 9, handler = patch },
-  global = { endMsgNum = 3, handler = global },
-  atrophy = { endMsgNum = 3, handler = atrophy },
-  splitDouble = { endMsgNum = 14, handler = splitDouble }
+  patch = { endMsgNum = 9, handlerName = "patch" },
+  global = { endMsgNum = 3, handlerName = "global" },
+  atrophy = { endMsgNum = 3, handlerName = "atrophy" },
+  splitDouble = { endMsgNum = 14, handlerName = "splitDouble" }
 }
 
 function safe_peek(sysexBlock, length, i)
@@ -75,11 +75,11 @@ function call_handler(dumpType, dump)
   local handlerInfo = HANDLERS[dumpType]
   if not handlerInfo then return end
   
-  local fn = handlerInfo.handler
+  local fn = _G[handlerInfo.handlerName]
   if type(fn) == "function" then
     pcall(fn, dump)
   else
-    print("onSysex: " .. dumpType .. "() not available")
+    print("onSysex: " .. handlerInfo.handlerName .. "() not available")
   end
 end
 
