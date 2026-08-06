@@ -8,6 +8,9 @@ local EOF_SYSEX_FOURTH_BYTE = 0x7B -- ACK byte of EOF message
 -- Dump type constants
 local DUMP_TYPES = {
   PATCH = "patch",
+  UPPER_PATCH = "upperPatch",
+  LOWER_PATCH = "lowerPatch",
+  PATCHX = "patchX",
   GLOBAL = "global",
   ATROPHY = "atrophy",
   SPLIT_DOUBLE = "splitDouble",
@@ -17,6 +20,9 @@ local DUMP_TYPES = {
 -- Handler mapping: dumpType -> {endMsgNum, handlerName}
 local HANDLERS = {
   patch = { endMsgNum = 9, handlerName = "patch" },
+  upperPatch = { endMsgNum = 9, handlerName = "upperPatch" },
+  lowerPatch = { endMsgNum = 9, handlerName = "lowerPatch" },
+  patchX = { endMsgNum = 9, handlerName = "patchX" },
   global = { endMsgNum = 3, handlerName = "global" },
   atrophy = { endMsgNum = 3, handlerName = "atrophy" },
   splitDouble = { endMsgNum = 14, handlerName = "splitDouble" },
@@ -48,7 +54,15 @@ end
 function detect_dump_type(sysexBlock, length)
   local hdrText = peek_string(sysexBlock, length, 21, 16):lower()
   
-  if hdrText:find("upper patch", 1, true) or hdrText:find("lower patch", 1, true) or hdrText:find("patchx", 1, true) then
+  -- Prefer specific patch variants first
+  if hdrText:find("upper patch", 1, true) then
+    return DUMP_TYPES.UPPER_PATCH
+  elseif hdrText:find("lower patch", 1, true) then
+    return DUMP_TYPES.LOWER_PATCH
+  elseif hdrText:find("patchx", 1, true) then
+    return DUMP_TYPES.PATCHX
+  elseif hdrText:find("upper patch", 1, true) or hdrText:find("lower patch", 1, true) or hdrText:find("patchx", 1, true) then
+    -- fallback to generic patch (should not normally be reached because of above checks)
     return DUMP_TYPES.PATCH
   elseif hdrText:find("global", 1, true) then
     return DUMP_TYPES.GLOBAL
@@ -223,6 +237,48 @@ function splitDouble(dump)
   dump = {}
   msgNumber = 0
   print("split double settings parsed. Number of bytes: ".. #data)
+end
+
+-- process an upper patch dump
+function upperPatch(dump)
+  print("upper patch settings")
+  local result = parse_sysex(dump)
+  if not result or type(result.data) ~= "table" then
+    print("Could not read data")
+    return
+  end
+  local data = result.data
+  dump = {}
+  msgNumber = 0
+  print("upper patch settings parsed. Number of bytes: ".. #data)
+end
+
+-- process a lower patch dump
+function lowerPatch(dump)
+  print("lower patch settings")
+  local result = parse_sysex(dump)
+  if not result or type(result.data) ~= "table" then
+    print("Could not read data")
+    return
+  end
+  local data = result.data
+  dump = {}
+  msgNumber = 0
+  print("lower patch settings parsed. Number of bytes: ".. #data)
+end
+
+-- process a patchX dump
+function patchX(dump)
+  print("patchX settings")
+  local result = parse_sysex(dump)
+  if not result or type(result.data) ~= "table" then
+    print("Could not read data")
+    return
+  end
+  local data = result.data
+  dump = {}
+  msgNumber = 0
+  print("patchX settings parsed. Number of bytes: ".. #data)
 end
 
 -- process a current program dump
