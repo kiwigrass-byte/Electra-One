@@ -11,6 +11,7 @@ local currentPort    = currentDevice:getPort ()
 local upperDevice    = devices.get(2)
 local upperChannel   = upperDevice:getChannel ()
 local upperPort      = upperDevice:getPort ()
+local suppressOutputs = true
 
 local authorDate ="New Ignis 2024"
 local patchName = ""  -- initialize patch name
@@ -152,6 +153,7 @@ function timer.onTick()
   amountTicks = amountTicks + 1
   if amountTicks > 4 then
     timer.disable()
+    suppressOutputs = false -- allow NRPNs to be sent after init 
     info.setText(patchName)
   end
 end
@@ -216,6 +218,7 @@ end
 
 -------------------------------------------bitmasked parameters -------------------------------------------------------------------------------------
 function sendNrpn(port, channel, parameter, value)
+  if suppressOutputs then return end 
   local pMSB = (parameter >> 7) & 0x7F
   local pLSB = parameter & 0x7F
   local vMSB = (value >> 7) & 0x7F
