@@ -1,0 +1,166 @@
+-- helper functions and globals for midi.onSysex 
+local sysex_states = {}
+local VENDOR_ID = {0x00, 0x20, 0x32} -- Behringer
+--local MODEL_BYTE_D = 0x3A             -- UB-Xa D model identifier
+--local MODEL_BYTE = 0x21             -- UB-Xa model identifier
+local HEADER_MSG_TYPE = 1
+local PACKET_MSG_TYPE = 2
+local EOF_SYSEX_SECOND_BYTE = 0x7E
+local EOF_SYSEX_FOURTH_BYTE = 0x7B
+
+function safe_peek(sysexBlock, length, i)
+  if type(i) ~= "number" or i < 1 or i > length then return nil end
+  return sysexBlock:peek(i)
+end
+
+function peek_string(sysexBlock, length, startIndex, count)
+  if startIndex < 1 or count < 1 then return "" end
+  local t = {}
+  for j = 0, count - 1 do
+    local b = safe_peek(sysexBlock, length, startIndex + j)
+    if not b then break end
+    t[#t+1] = string.char(b)
+  end
+  return table.concat(t)
+end
+
+function is_vendor_match(sysexBlock, length)
+  return safe_peek(sysexBlock, length, 2) == VENDOR_ID[1]
+     and safe_peek(sysexBlock, length, 3) == VENDOR_ID[2]
+     and safe_peek(sysexBlock, length, 4) == VENDOR_ID[3]
+end
+
+function reset_state_for_iface(iface)
+  sysex_states[iface] = { msgNumber = 0, section = 0, dump = {}, p_flag = false, g_flag = false, a_flag = false, active = false, last_ts = nil }
+end
+
+function midi.onSysex(midiInput, sysexBlock)
+  local ok, err = pcall(function()
+  local length = sysexBlock:getLength()
+  local iface = tostring(midiInput.interface or midiInput.name or "unknown")
+  local state = sysex_states[iface]
+  if not state then
+    reset_state_for_iface(iface)
+    state = sysex_states[iface]
+  end
+  local peek = function(i) return safe_peek(sysexBlock, length, i) end
+  -- If starting a new transfer, reset dump
+  if state.msgNumber == 0 then
+    state.dump = {}
+    state.section = 0
+    state.p_flag = false
+    state.g_flag = false
+    state.a_flag = false
+    state.s_flag = false
+  end
+  -- HEADER detection:
+  if length > 6 and peek(11) == HEADER_MSG_TYPE then -- header seen. decide whether it's a new transfer or a bona fide additional header. 
+    local expected_header_msgnum = 1 + (state.section or 0) * 2 
+    if state.msgNumber ~= 0 and state.msgNumber ~= expected_header_msgnum then -- We're in the middle of a transfer but this header is NOT the expected header for that transfer.  
+      print("onSysex: unexpected header while msgNumber=" .. tostring(state.msgNumber) .. "; resetting state and starting new transfer") 
+      reset_state_for_iface(iface) state = sysex_states[iface] -- Treat it as the start of a new transfer to avoid appending onto a corrupted/partial dump.
+    end
+    if state.msgNumber == 0 then
+      -- start of first header
+      state.section = 0
+      state.msgNumber = 1
+      -- validate vendor & model on initial header
+      if not is_vendor_match(sysexBlock, length) then
+        print("onSysex: Not Behringer vendor; ignoring message")
+        -- reset to safe state
+        reset_state_for_iface(iface)
+        return
+      end
+      if peek(7) ~= MODEL_BYTE then
+        print("onSysex: Not UB-Xa model; ignoring message")
+        reset_state_for_iface(iface)
+        return
+      end
+      -- set dump type based on header text (only for first header)
+      local hdrText = peek_string(sysexBlock, length, 21, 12) -- positions 21..32
+      local tl = hdrText:lower()
+      if tl:find("upper patch", 1, true) or tl:find("lower patch", 1, true) or tl:find("patchx", 1, true) then
+        state.p_flag, state.g_flag, state.a_flag = true, false, false
+      elseif tl:find("global", 1, true) then
+        state.g_flag, state.p_flag, state.a_flag = true, false, false
+      elseif tl:find("atrophy", 1, true) then
+        state.a_flag, state.p_flag, state.g_flag = true, false, false
+      elseif tl:find("split double", 1, true) then
+        state.s_flag, state.a_flag, state.p_flag, state.g_flag = true, false, false, false
+      end
+    else
+      -- additional header inside the same transfer -> advance section
+      state.section = (state.section or 0) + 1
+      state.msgNumber = 1 + state.section * 2  -- 3, 5, ...
+      -- do NOT reset flags: dump type determined by first header
+    end
+  end
+  -- PACKET detection: compute packet msgNumber relative to current section. There is 7 packets for a patch dump, 1 for a global, 1 for atrophy profile
+  for i = 0, 13 do
+    if length > 6 and peek(11) == PACKET_MSG_TYPE and peek(12) == i then
+      state.msgNumber = i + 2 + (state.section or 0) * 2
+    end
+  end
+  -- EOF detection
+  local secondByte = peek(2)
+  local fourthByte = peek(4)
+  if length == 6 and secondByte == EOF_SYSEX_SECOND_BYTE and fourthByte == EOF_SYSEX_FOURTH_BYTE then
+    if state.p_flag then
+      state.msgNumber = 9
+    elseif state.a_flag then
+      state.msgNumber = 3
+    elseif state.g_flag then
+      state.msgNumber = 3
+    end
+  end
+  -- Logging
+  print(string.format("sysex (msg=%d) message received: interface=%s length=%d",
+    state.msgNumber, iface, length))
+  for startIndex = 1, length, 18 do
+    local bytes = {}
+    local endIndex = math.min(startIndex + 17, length)
+    for i = startIndex, endIndex do
+      local b = peek(i) or 0
+      bytes[#bytes + 1] = string.format("%02X", b)
+    end
+    print(string.format("data[%04X]: %s", startIndex - 1, table.concat(bytes, " ")))
+  end
+  -- collect each message into dump
+  local temp = {}
+  for i = 1, length do
+    local b = peek(i)
+    if not b then break end
+    temp[i] = b
+  end
+  table.insert(state.dump, temp)
+  -- call the appropriate handler on EOF for each type
+  if state.p_flag and state.msgNumber == 9 then
+    if type(patch) == "function" then pcall(patch, state.dump) else print("onSysex: patch() not available") end
+    -- reset state
+    reset_state_for_iface(iface)
+    return
+  elseif state.a_flag and state.msgNumber == 3 then
+    if type(atrophy) == "function" then pcall(atrophy, state.dump) else print("onSysex: atrophy() not available") end
+    reset_state_for_iface(iface)
+    return
+  elseif state.g_flag and state.msgNumber == 3 then
+    if type(global) == "function" then pcall(global,state.dump) else print("onSysex: global() not available") end
+    reset_state_for_iface(iface)
+    return
+  elseif state.s_flag and state.msgNumber == 14 then
+    if type(global) == "function" then pcall(splitDouble,state.dump) else print("onSysex: global() not available") end
+    reset_state_for_iface(iface)
+    return
+  end
+  -- advance message number for next call
+  if type(state.msgNumber) == "number" then
+    state.msgNumber = state.msgNumber + 1
+  else
+    state.msgNumber = 0
+  end
+end)
+
+  if not ok then
+    print("onSysex: pcall failed: " .. tostring(err))
+  end
+end
