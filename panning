@@ -1,0 +1,45 @@
+function panning(valueObject,value)
+  if value == nil then return end
+  local widthParam = parameterMap.get(deviceId, PT_VIRTUAL, 201)/100
+  local widthControl = controls.get(92)
+  local paramList = {2176,2177,2178,2179,2180,2181,2182,2183,2184,2185,2186,2187,2188,2189,2190,2191}
+  local voice = {}
+  -- hide the width control unless random is selected
+  if value < 3 then 
+    widthControl:setVisible (FALSE)
+  end
+  if value == 0 then 
+    for i = 1,16,1 do
+      parameterMap.set(deviceId, 3, paramList[i], 128)
+    end
+  elseif value == 1 then
+    for i = 1,16,2 do
+      parameterMap.set(deviceId, 3, paramList[i], 0)
+    end
+    for i = 2,16,2 do
+      parameterMap.set(deviceId, 3, paramList[i], 255)
+    end
+  elseif value == 2 then
+    local idx1 = {1,5,9,13}
+    local idx2 = {2,6,10,14}
+    local idx3 = {3,7,11,15}
+    local idx4 = {4,8,12,16}
+    for i = 1,4 do
+      parameterMap.set(deviceId, 3, paramList[idx1[i]], 0)
+    end
+    for i = 1,4 do
+      parameterMap.set(deviceId, 3, paramList[idx2[i]], 64)
+    end
+    for i = 1,4 do
+      parameterMap.set(deviceId, 3, paramList[idx3[i]], 192)
+    end
+    for i = 1,4 do
+      parameterMap.set(deviceId, 3, paramList[idx4[i]], 255)
+    end
+  elseif value == 3 then 
+    widthControl:setVisible (not widthControl:isVisible())
+    for i = 1,16,1 do
+      parameterMap.set(deviceId, 3, paramList[i], 128)
+    end
+  end
+end
