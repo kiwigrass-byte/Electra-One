@@ -1,19 +1,17 @@
 -- helper functions and globals for midi.onSysex 
 local sysex_states = {}
 local VENDOR_ID = {0x00, 0x20, 0x32} -- Behringer
---local MODEL_BYTE_D = 0x3A             -- UB-Xa D model identifier
---local MODEL_BYTE = 0x21             -- UB-Xa model identifier
 local HEADER_MSG_TYPE = 1
 local PACKET_MSG_TYPE = 2
-local EOF_SYSEX_SECOND_BYTE = 0x7E
-local EOF_SYSEX_FOURTH_BYTE = 0x7B
+local EOF_SYSEX_FOURTH_BYTE = 0x7B -- ACK byte of EOF message
 
 -- Dump type constants
 local DUMP_TYPES = {
   PATCH = "patch",
   GLOBAL = "global",
   ATROPHY = "atrophy",
-  SPLIT_DOUBLE = "splitDouble"
+  SPLIT_DOUBLE = "splitDouble",
+  CURRENT_PROGRAM = "currentProgram",
 }
 
 -- Handler mapping: dumpType -> {endMsgNum, handlerName}
@@ -21,7 +19,8 @@ local HANDLERS = {
   patch = { endMsgNum = 9, handlerName = "patch" },
   global = { endMsgNum = 3, handlerName = "global" },
   atrophy = { endMsgNum = 3, handlerName = "atrophy" },
-  splitDouble = { endMsgNum = 14, handlerName = "splitDouble" }
+  splitDouble = { endMsgNum = 14, handlerName = "splitDouble" },
+  currentProgram = { endMsgNum = 16, handlerName = "currentProgram" },
 }
 
 function safe_peek(sysexBlock, length, i)
@@ -57,6 +56,8 @@ function detect_dump_type(sysexBlock, length)
     return DUMP_TYPES.ATROPHY
   elseif hdrText:find("split double", 1, true) then
     return DUMP_TYPES.SPLIT_DOUBLE
+  elseif hdrText:find("current program", 1, true) then
+    return DUMP_TYPES.CURRENT_PROGRAM
   end
   return nil
 end
@@ -166,20 +167,21 @@ function midi.onSysex(midiInput, sysexBlock)
     -- PACKET detection: simplified to single peek
     if length > 6 and safe_peek(sysexBlock, length, 11) == PACKET_MSG_TYPE then
       local packetNum = safe_peek(sysexBlock, length, 12)
-      if packetNum and packetNum >= 0 and packetNum <= 13 then
+      if packetNum and packetNum >= 0 and packetNum <= 16 then
         state.msgNumber = packetNum + 2 + (state.section or 0) * 2
       end
     end
     
     -- EOF detection
-    if length == 6 and safe_peek(sysexBlock, length, 2) == EOF_SYSEX_SECOND_BYTE 
-       and safe_peek(sysexBlock, length, 4) == EOF_SYSEX_FOURTH_BYTE then
+    if length == 6 and safe_peek(sysexBlock, length, 4) == EOF_SYSEX_FOURTH_BYTE then
       if state.dumpType == DUMP_TYPES.PATCH then
         state.msgNumber = 9
       elseif state.dumpType == DUMP_TYPES.GLOBAL or state.dumpType == DUMP_TYPES.ATROPHY then
         state.msgNumber = 3
       elseif state.dumpType == DUMP_TYPES.SPLIT_DOUBLE then
         state.msgNumber = 14
+      elseif state.dumpType == DUMP_TYPES.CURRENT_PROGRAM then
+        state.msgNumber = 16
       end
     end
     
@@ -206,4 +208,35 @@ function midi.onSysex(midiInput, sysexBlock)
   if not ok then
     print("onSysex: pcall failed: " .. tostring(err))
   end
+end
+
+-- process a split double dump
+function splitDouble(dump)
+  -- parse of the incoming dump
+  local result = parse_sysex(dump)
+  if not result or type(result.data) ~= "table" then
+    print("Could not read data")
+    return
+  end
+  local data = result.data
+  -- restore/cleanup original globals
+  dump = {}
+  msgNumber = 0
+  print("split double settings parsed. Number of bytes: ".. #data)
+end
+
+-- process a current program dump
+function currentProgram(dump)
+  print("current program settings")
+  -- parse of the incoming dump
+  local result = parse_sysex(dump)
+  if not result or type(result.data) ~= "table" then
+    print("Could not read data")
+    return
+  end
+  local data = result.data
+  -- restore/cleanup original globals
+  dump = {}
+  msgNumber = 0
+  print("current program settings parsed. Number of bytes: ".. #data)
 end
