@@ -11,7 +11,22 @@ local currentPort    = currentDevice:getPort ()
 local upperDevice    = devices.get(2)
 local upperChannel   = upperDevice:getChannel ()
 local upperPort      = upperDevice:getPort ()
+
 local suppressOutputs = true
+local pendingSets = {} 
+local orig_parameterMap_set = parameterMap.set 
+parameterMap.set = function(dev, pt, p, v) 
+  if suppressOutputs then pendingSets[#pendingSets + 1] = {dev, pt, p, v} return end 
+  return orig_parameterMap_set(dev, pt, p, v) 
+end
+local function flushPendingSets() 
+  if #pendingSets == 0 then return end 
+  for _, entry in ipairs(pendingSets) do 
+    local dev, pt, p, v = entry[1], entry[2], entry[3], entry[4] 
+    orig_parameterMap_set(dev, pt, p, v) 
+  end 
+  pendingSets = {} 
+end
 
 local authorDate ="New Ignis 2024"
 local patchName = ""  -- initialize patch name
@@ -154,6 +169,7 @@ function timer.onTick()
   if amountTicks > 4 then
     timer.disable()
     suppressOutputs = false -- allow NRPNs to be sent after init 
+    flushPendingSets() 
     info.setText(patchName)
   end
 end
