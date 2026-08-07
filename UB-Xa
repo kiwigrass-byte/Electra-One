@@ -1170,7 +1170,7 @@ local mappings = {
   end
   upperChannel   = parameterMap.get(deviceId, PT_VIRTUAL, 1159) + 1 
   lowerChannel   = parameterMap.get(deviceId, PT_VIRTUAL, 1160) + 1
-  currentChannel = upperChannel
+--  currentChannel = upperChannel
   print("current midi channel is " ..currentChannel )
   print("global settings parsed. Number of bytes: ".. #data)
 end
