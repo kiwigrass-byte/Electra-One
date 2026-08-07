@@ -4,33 +4,15 @@
 
 local MODEL_BYTE = 0x3A  -- set Desktop Model
 -- local MODEL_BYTE = 0x21  -- Keyboard Model
-local currentDevice  = devices.get(1)
-local deviceId = currentDevice:getId()
-local currentChannel = currentDevice:getChannel ()
-local currentPort    = currentDevice:getPort ()
+local deviceId = devices.get(1):getId()
+local currentChannel = devices.get(1):getChannel ()
+local currentPort    = devices.get(1):getPort ()
 local upperDevice    = devices.get(2)
 local upperChannel   = upperDevice:getChannel ()
 local upperPort      = upperDevice:getPort ()
-
-local suppressOutputs = true
-local orig_midi_sendControlChange = midi.sendControlChange 
-local orig_midi_sendProgramChange = midi.sendProgramChange 
-local orig_midi_sendStart = midi.sendStart 
-local orig_midi_sendStop = midi.sendStop
-
-local function silenceMidiOutputs() -- Silence the runtime calls that emit NRPN/CC and program/start/stop 
-  midi.sendControlChange = function(...) end 
-  midi.sendProgramChange = function(...) end 
-  midi.sendStart = function(...) end 
-  midi.sendStop = function(...) end 
-end
-
-local function restoreMidiOutputs() 
-  midi.sendControlChange = orig_midi_sendControlChange 
-  midi.sendProgramChange = orig_midi_sendProgramChange 
-  midi.sendStart = orig_midi_sendStart 
-  midi.sendStop = orig_midi_sendStop 
-end
+local lowerDevice    = devices.get(3)
+local lowerChannel   = lowerDevice:getChannel ()
+local lowerPort      = lowerDevice:getPort ()
 
 local authorDate ="New Ignis 2024"
 local patchName = ""  -- initialize patch name
@@ -39,16 +21,20 @@ timer.setPeriod(250)
 local amountTicks = 0
 events.subscribe(POTS)
 
--- load the UB-Xa global settings when the preset is first loaded and read
-function preset.onReady()
-  getGlobals()
-end
+-- initailize panning
+local panDefValue = {}
+for i = 1,16 do panDefValue[i] = 128 end -- all in center
 
 function setChannel(valueObject, value) 
   -- if value ==0 then value = 3 end -- default behind the screens on Global Channel
   local selectedDevice= devices.get(value+2)
   currentChannel = selectedDevice:getChannel ()
-  currentDevice:setChannel (currentChannel )
+  devices.get(1):setChannel (currentChannel )
+end
+
+-- load the UB-Xa global settings when the preset is first loaded and read
+function preset.onLoad()
+  getGlobals()
 end
 
 function seqStartStop(valueObject, value)
@@ -66,16 +52,16 @@ end
 function fmtPan(valueObject,value)
 local control = valueObject:getControl():getId()
  local side =" L"
- if (value < 128 ) then 
-    controls.get(control):setColor (RED)
- elseif (value == 128) then
-    side = " Center"
+ if (value < 0 ) then 
     controls.get(control):setColor (WHITE)
- elseif (value > 128) then
+ elseif (value == 0) then
+    side = " Center"
+    controls.get(control):setColor (26 *256*256 + 200*256 + 30)
+ elseif (value > 0) then
     side = " R"
-    controls.get(control):setColor (BLUE)
+    controls.get(control):setColor (RED)
  end
- return(string.format ("%.0f%%",100*(math.abs(128-math.floor(value)))/128) .. side)
+ return(string.format ("%.0f%%",100*(math.abs(math.floor(value)))/128) .. side)
 end
 
 -- Add % sign
@@ -108,6 +94,10 @@ end
 -- Add divide by 4
 function divide4(valueObject, value)
     return (string.format ("%.1f", value/4))
+end
+-- Add semitones, scaled to 128 = 0
+function semitones128 (valueObject, value)
+    return (string.format ("%i semitones", value-128))
 end
 -- Add semitones, scaled to 64 = 0
 function semitones64 (valueObject, value)
@@ -172,8 +162,6 @@ function timer.onTick()
   amountTicks = amountTicks + 1
   if amountTicks > 4 then
     timer.disable()
-    suppressOutputs = false -- allow NRPNs to be sent after init 
-    restoreMidiOutputs() -- allow the runtime to send again 
     info.setText(patchName)
   end
 end
@@ -236,99 +224,144 @@ function events.onPotTouchChange(potId, controlId, touched)
   end
 end
 
--------------------------------------------bitmasked parameters -------------------------------------------------------------------------------------
-function sendNrpn(port, channel, parameter, value)
-  if suppressOutputs then return end 
-  local pMSB = (parameter >> 7) & 0x7F
-  local pLSB = parameter & 0x7F
-  local vMSB = (value >> 7) & 0x7F
-  local vLSB = value & 0x7F
-  midi.sendControlChange(port, channel, 99, pMSB)
-  midi.sendControlChange(port, channel, 98, pLSB)
-  midi.sendControlChange(port, channel, 6, vMSB)
-  midi.sendControlChange(port, channel, 38, vLSB)
+-- panning control parameter
+function setPanType(valueObject, type)
+  if type == nil then return end
+  local widthControl = math.min(parameterMap.get(deviceId, PT_VIRTUAL,201),100)
+  local paramList = {
+    2176,2177,2178,2179,2180,2181,2182,2183,
+    2184,2185,2186,2187,2188,2189,2190,2191
+  }
+  local value = 0
+  local steps = {0, 85, 170, 255}
+  for i, param in ipairs(paramList) do  
+    if     type == 0 then value = 128 --  center all (128);
+    elseif type == 1 then value = (i % 2 == 1) and 0 or 255 -- alternate left/right: odd indices -> 0, even indices -> 255   
+    elseif type == 2 then value = steps[((i - 1) % 4) + 1] -- four-step pan groups: 0, 64, 192, 255 repeating every 4 voices
+    else value = math.random(0, 255) -- random 
+    end    
+    parameterMap.set(deviceId, PT_NRPN, param, math.floor(128+(value-128)*widthControl/100))
+    panDefValue[i]=value
+  end  
+end 
+
+function setPanWidth(valueObject, value)
+  local widthControl = parameterMap.get(deviceId, PT_VIRTUAL,201)
+  local paramList = {
+    2176,2177,2178,2179,2180,2181,2182,2183,
+    2184,2185,2186,2187,2188,2189,2190,2191
+  }
+  for i, param in ipairs(paramList) do
+    --print ("i : "..i..", param;"..param.." panDefValue[i]: "..panDefValue[i].." widthControl: "..widthControl)
+    parameterMap.set(deviceId, PT_NRPN, param, math.max(math.min(math.floor(128+(panDefValue[i]-128)*widthControl/100),255),0))   
+  end
+end
+
+function setPanDefault(valueObject, value)
+  local parameterNumber = valueObject:getMessage ():getParameterNumber ()
+  panDefValue[parameterNumber+1-2176] = value+128
 end
 
 -- bitmask helper function ---
-function sendBitmask(paramNumber, deviceIndex, paramList)
+function sendBitmask(paramNumber, deviceId, paramList)
   -- paramList is a list of virtual parameter indices where LSB->first element
-  local result = 0
-  local dev = deviceIndex or 1
+  local value = 0
   for i,p in ipairs(paramList) do
-    if p and parameterMap.get(dev, PT_VIRTUAL, p) ~= 0 then
-      result = result + (1 << (i-1))
+    if p and parameterMap.get(deviceId, PT_VIRTUAL, p) ~= 0 then
+      value = value + (1 << (i-1))
     end
   end
-  sendNrpn(currentPort, currentChannel, paramNumber, result)
+  local pMSB = (paramNumber >> 7) & 0x7F
+  local pLSB = paramNumber & 0x7F
+  local vMSB = (value >> 7) & 0x7F
+  local vLSB = value & 0x7F
+  midi.sendControlChange(currentPort, currentChannel, 99, pMSB)
+  midi.sendControlChange(currentPort, currentChannel, 98, pLSB)
+  midi.sendControlChange(currentPort, currentChannel, 6, vMSB)
+  midi.sendControlChange(currentPort, currentChannel, 38, vLSB)
 end
 
 function bitMask007(valueObject,value) -- NRPN 0/7 = 7 ControlPortamentoSettings 
 -- Bitmask: Match (0001) Quantize (0010) Bend (0100) Exponential (1000)
+  if value == 0 then return end
   sendBitmask(7, deviceId, {54,60,59,65})
 end
 
 function bitMask101(valueObject,value) -- NRPN 1/1 = 129 PerformanceSettings 
 -- Bitmask: Bend Osc2 only~Bend Osc1&Osc2 (000001) Custombend~Bend +/-2 (000010) OSC1 (000100) OSC2 (001000) Upper (010000) Lower (100000)
+  if value == 0 then return end
   sendBitmask(129, deviceId, {8,10,19,97,103,109}) 
 end
 
 function bitMask107(valueObject,value) -- NRPN 1/7 = 135 PerformanceLFOMods 
 -- Bitmask: Track (0001) Envelope (0010) TempoLock (0100) LFOTrig (1000)
+  if value == 0 then return end
   sendBitmask(135, deviceId, {117,118,119}) 
 end
 
 function bitMask205(valueObject,value) -- NRPN 2/5 = 261 ModulationLFOMods 
 -- Bitmask: LFO Track on~LFO Track off (0001) LFOEnv2 Rate on~LFOEnv2 Rate off (0010) TempoLock (0100) LFOTrig (1000)
+  if value == 0 then return end
   sendBitmask(261, deviceId, {37,38,39,40}) 
 end
 
 function bitMask207(valueObject,value) -- NRPN 2/7 = 263 ModulationChannel1Sends 
 -- Bitmask: C1 OSC1 LFO on~C1 OSC1 LFO off (001) C1 OSC2 LFO on~C1 OSC2 LFO off (010) C1 Flt LFO on~C1 Flt LFO off (100)
+  if value == 0 then return end
   sendBitmask(263, deviceId, {50,51,27}) 
 end
 
 function bitMask208(valueObject,value) -- NRPN 2/8 = 264 ModulationChannel1Mods 
 -- Bitmask: C1 Quant on~C1 Quant off (01) LFOEnv1 Inv on~LFOEnv1 Inv off (10)
+  if value == 0 then return end
   sendBitmask(264, deviceId, {30,31}) 
 end
 
 function bitMask209(valueObject,value) -- NRPN 2/9 = 265 ModulationChannel2Sends 
 -- Bitmask: C2 PWM1 LFO on~C2 PWM1 LFO off (001) C2 PWM2 LFO on~C2 PWM2 LFO off (010) C2 Vol LFO on~C2 Vol LFO off (100)
+  if value == 0 then return end
   sendBitmask(265, deviceId, {33,35,44}) 
 end
 
 function bitMask210(valueObject,value) -- NRPN 2/10 = 266 ModulationChannel2Mods 
 -- Bitmask: C2 Quant on~C2 Quant off (01) LFOEnv2 Inv on~LFOEnv2 Inv off (10)
+  if value == 0 then return end
   sendBitmask(266, deviceId, {49,46}) 
 end
 
 function bitMask212(valueObject,value) -- NRPN 2/12 = 268 ModulationQuirks 
 -- Bitmask: FlipSquare (01) FlipVCFMod (10)
+  if value == 0 then return end
   sendBitmask(268, deviceId, {52,55}) 
 end
 
 function bitMask313(valueObject,value) -- NRPN 3/13 = 397 EnvelopesFilterMods 
 -- Bitmask: Flip (00001) Repeat (00010) Retrig (00100) Loop (01000) Legato (10000)
+  if value == 0 then return end
   sendBitmask(397, deviceId, {136,137,138,139,140}) 
 end
 
 function bitMask314(valueObject,value) -- NRPN 3/14 = 398 EnvelopesLoudnessMods 
 -- Bitmask: Flip (00001) Repeat (00010) Retrig (00100) Loop (01000) Legato (10000)
+  if value == 0 then return end
   sendBitmask(398, deviceId, {141,142,143,144,145}) 
 end
 
 function bitMask404(valueObject,value) -- NRPN 4/4 = 516 ModulationChannel1Mods 
 -- Bitmask: OSC2 sync on~OSC2 sync off (01) OSC2 f-env on~OSC2 f-env off (10)
+  if value == 0 then return end
   sendBitmask(516, deviceId, {2,9}) 
 end
 
 function bitMask405(valueObject,value) -- NRPN 4/5 = 517 OscillatorsOSC1State
 -- Bitmask: OSC1 full~OSC1 off (001) OSC1 VCO LFO 180~OSC1 VCO LFO 0 (010) OSC1 PWM LFO 180~OSC1 PWM LFO 0 (100)
+  if value == 0 then return end
   sendBitmask(517, deviceId, {3,154,155}) 
 end
 
 function bitMask504(valueObject,value) -- NRPN 5/4 = 644 FilterModes 
 -- Bitmask: Filter track on~Filter track off (01) 4 pole filter~2 pole filter (10)
+  if value == 0 then return end
   sendBitmask(644, deviceId, {76,89}) 
 end
 
@@ -345,36 +378,20 @@ function selectIt(ValueObject, value)
   if value==0 then return end
   local message = ValueObject:getMessage ()
   local parameterNumber = message:getParameterNumber ()
-  print ("Parameter Number: " .. parameterNumber) 
   local messageValue = message:getValue ()
-  print ("Valueobject value: " .. value)
-  print ("message value: " .. messageValue )
   local bankLSB = parameterMap.get (1, PT_VIRTUAL, parameterNumber-messageValue -1)
   local progNum = parameterMap.get (1, PT_VIRTUAL, parameterNumber-messageValue ) + messageValue - 2
   if progNum == 128 then progNum= 0 end
   if progNum == -1   then progNum=127  end
   parameterMap.set (1, PT_VIRTUAL, parameterNumber-messageValue,progNum)
   print (string.format("selecting patch: Bank = %d, Prog = %d", bankLSB, progNum))
---  local bank = bankLSB + 65
---  local digits = asciiBytesFromNumber(progNum, 3)
---  local message = {0x00, 0x20, 0x32, 0x00, 0x01, MODEL_BYTE, 0x7F, 0x74, 0x07,
---    0x03, 0x00, 0x42, 0x49, 0x4E, 0x20, 0x50, 0x61, 0x74, 0x63, 0x68,
---    0x58, 0x20, bank, digits[1], digits[2], digits[3], 0x20,0x20,0x20}
---  midi.sendSysex (currentPort, message)
-  midi.sendControlChange(upperPort , upperChannel , 32, bankLSB)
-  midi.sendProgramChange(upperPort , upperChannel , progNum)
+  midi.sendControlChange(currentPort , currentChannel , 32, bankLSB)
+  midi.sendProgramChange(currentPort , currentChannel , progNum)
 end
 
 -------------------------------------------------------------------------
--- parses the parameters and patch name from a patch sysEx dump
+-- parses the parameters of UB-Xa sysEx dump
 ------------------------------------------------------------------------
-local dump = {}       -- store message sequence
-local msgNumber = 0    -- incoming message sequence counter (0 == start)
-local p_flag = false   -- patch sequence
-local g_flag = false   -- global sequence
-local a_flag = false   -- atrophy sequence
-
-------------------------------------------------------------------------------
 -- This is lua equivalent of the php script by @Electrolove to extract the patch name from a UB-Xa patch sysEx dump
 -- Helper: safe getter that treats PHP-style 0-based indices: pass php_index (0-based)
 function get(msg, idx0)
@@ -565,23 +582,32 @@ function getPatch(valueObject, value)
   midi.sendSysex (currentPort, message)
 end
 
+-- request Patch Names
+function getPatchNames(valueObject, value)
+  if value == 0 then return end
+  local message = {0x00, 0x20, 0x32, 0x00, 0x01, MODEL_BYTE, 0x7F, 0x74, 0x07,
+    0x03, 0x7F, 0x42, 0x49, 0x4E, 0x20, 0x50, 0x61, 0x74, 0x63, 0x68, 
+    0x20, 0x4E, 0x61, 0x6D, 0x65, 0x73, 0x20, 0x20, 0x20, 0x20, 0x20}
+    --, 0x00, 0x03}
+  midi.sendSysex (currentPort, message)
+end
+
 -- helper function to parse an x bit bitmask to a virtual parameter with values 0..2^x-1
 function pset(params, value)
   local x = #params
   -- coerce to integer and keep only the lowest x bits (values: 0..2^x-1)
   local v = math.floor(tonumber(value) or 0) & (2^x - 1)
-  local set = parameterMap.set
-  local dev = deviceId
-  local PT = PT_VIRTUAL
+--[[
   -- reset all parameters once
   for _, p in ipairs(params) do
-    if p ~= nil then set(dev, PT, p, 0) end
+    if p ~= nil then parameterMap.set(deviceId, PT_VIRTUAL, p, 0) end
   end
+]]
   if v == 0 then return end
   -- set parameters according to bits of v (LSB -> p1)
   for i, p in ipairs(params) do
     if p ~= nil and ((v >> (i - 1)) & 1) ~= 0 then
-      set(dev, PT, p, 1)
+      parameterMap.set(deviceId, PT_VIRTUAL, p, 1)
     end
   end
 end
@@ -589,12 +615,31 @@ end
 -- helper functions and globals for midi.onSysex 
 local sysex_states = {}
 local VENDOR_ID = {0x00, 0x20, 0x32} -- Behringer
---local MODEL_BYTE_D = 0x3A             -- UB-Xa D model identifier
---local MODEL_BYTE = 0x21             -- UB-Xa model identifier
 local HEADER_MSG_TYPE = 1
 local PACKET_MSG_TYPE = 2
-local EOF_SYSEX_SECOND_BYTE = 0x7E
-local EOF_SYSEX_FOURTH_BYTE = 0x7B
+local EOF_SYSEX_FOURTH_BYTE = 0x7B -- ACK byte of EOF message
+
+-- Dump type constants
+local DUMP_TYPES = {
+  UPPER_PATCH = "upperPatch",
+  LOWER_PATCH = "lowerPatch",
+  PATCHX = "patchX",
+  GLOBAL = "global",
+  ATROPHY = "atrophy",
+  SPLIT_DOUBLE = "splitDouble",
+  CURRENT_PROGRAM = "currentProgram",
+}
+
+-- Handler mapping: dumpType -> {endMsgNum, handlerName}
+local HANDLERS = {
+  upperPatch = { endMsgNum = 9, handlerName = "upperPatch" },
+  lowerPatch = { endMsgNum = 9, handlerName = "lowerPatch" },
+  patchX = { endMsgNum = 9, handlerName = "patchX" },
+  global = { endMsgNum = 3, handlerName = "global" },
+  atrophy = { endMsgNum = 3, handlerName = "atrophy" },
+  splitDouble = { endMsgNum = 14, handlerName = "splitDouble" },
+  currentProgram = { endMsgNum = 16, handlerName = "currentProgram" },
+}
 
 function safe_peek(sysexBlock, length, i)
   if type(i) ~= "number" or i < 1 or i > length then return nil end
@@ -618,253 +663,360 @@ function is_vendor_match(sysexBlock, length)
      and safe_peek(sysexBlock, length, 4) == VENDOR_ID[3]
 end
 
-function reset_state_for_iface(iface)
-  sysex_states[iface] = { msgNumber = 0, section = 0, dump = {}, p_flag = false, g_flag = false, a_flag = false, active = false, last_ts = nil }
+function detect_dump_type(sysexBlock, length)
+  local hdrText = peek_string(sysexBlock, length, 21, 16):lower()
+  
+  if hdrText:find("upper patch", 1, true) then
+    return DUMP_TYPES.UPPER_PATCH
+  elseif hdrText:find("lower patch", 1, true) then
+    return DUMP_TYPES.LOWER_PATCH
+  elseif hdrText:find("patchx", 1, true) then
+    return DUMP_TYPES.PATCHX
+  elseif hdrText:find("global", 1, true) then
+    return DUMP_TYPES.GLOBAL
+  elseif hdrText:find("atrophy", 1, true) then
+    return DUMP_TYPES.ATROPHY
+  elseif hdrText:find("split double", 1, true) then
+    return DUMP_TYPES.SPLIT_DOUBLE
+  elseif hdrText:find("current program", 1, true) then
+    return DUMP_TYPES.CURRENT_PROGRAM
+  end
+  return nil
 end
 
-function midi.onSysex(midiInput, sysexBlock)
-  local ok, err = pcall(function()
-  local length = sysexBlock:getLength()
-  local iface = tostring(midiInput.interface or midiInput.name or "unknown")
-  local state = sysex_states[iface]
-  if not state then
-    reset_state_for_iface(iface)
-    state = sysex_states[iface]
+function reset_state_for_iface(iface)
+  sysex_states[iface] = {
+    msgNumber = 0,
+    section = 0,
+    dump = {},
+    dumpType = nil,
+    last_ts = nil
+  }
+end
+
+function call_handler(dumpType, dump)
+  local handlerInfo = HANDLERS[dumpType]
+  if not handlerInfo then return end
+  
+  local fn = _G[handlerInfo.handlerName]
+  if type(fn) == "function" then
+    pcall(fn, dump)
+  else
+    print("onSysex: " .. handlerInfo.handlerName .. "() not available")
   end
-  local peek = function(i) return safe_peek(sysexBlock, length, i) end
-  -- If starting a new transfer, reset dump
-  if state.msgNumber == 0 then
-    state.dump = {}
-    state.section = 0
-    state.p_flag = false
-    state.g_flag = false
-    state.a_flag = false
-  end
-  -- HEADER detection:
-  if length > 6 and peek(11) == HEADER_MSG_TYPE then -- header seen. decide whether it's a new transfer or a bona fide additional header. 
-    local expected_header_msgnum = 1 + (state.section or 0) * 2 
-    if state.msgNumber ~= 0 and state.msgNumber ~= expected_header_msgnum then -- We're in the middle of a transfer but this header is NOT the expected header for that transfer.  
-      print("onSysex: unexpected header while msgNumber=" .. tostring(state.msgNumber) .. "; resetting state and starting new transfer") 
-      reset_state_for_iface(iface) state = sysex_states[iface] -- Treat it as the start of a new transfer to avoid appending onto a corrupted/partial dump.
-    end
-    if state.msgNumber == 0 then
-      -- start of first header
-      state.section = 0
-      state.msgNumber = 1
-      -- validate vendor & model on initial header
-      if not is_vendor_match(sysexBlock, length) then
-        print("onSysex: Not Behringer vendor; ignoring message")
-        -- reset to safe state
-        reset_state_for_iface(iface)
-        return
-      end
-      if peek(7) ~= MODEL_BYTE then
-        print("onSysex: Not UB-Xa model; ignoring message")
-        reset_state_for_iface(iface)
-        return
-      end
-      -- set dump type based on header text (only for first header)
-      local hdrText = peek_string(sysexBlock, length, 21, 12) -- positions 21..32
-      local tl = hdrText:lower()
-      if tl:find("upper patch", 1, true) or tl:find("lower patch", 1, true) or tl:find("patchx", 1, true) then
-        state.p_flag, state.g_flag, state.a_flag = true, false, false
-      elseif tl:find("global", 1, true) then
-        state.g_flag, state.p_flag, state.a_flag = true, false, false
-      elseif tl:find("atrophy", 1, true) then
-        state.a_flag, state.p_flag, state.g_flag = true, false, false
-      end
-    else
-      -- additional header inside the same transfer -> advance section
-      state.section = (state.section or 0) + 1
-      state.msgNumber = 1 + state.section * 2  -- 3, 5, ...
-      -- do NOT reset flags: dump type determined by first header
-    end
-  end
-  -- PACKET detection: compute packet msgNumber relative to current section. There is 7 packets for a patch dump, 1 for a global, 1 for atrophy profile
-  for i = 0, 13 do
-    if length > 6 and peek(11) == PACKET_MSG_TYPE and peek(12) == i then
-      state.msgNumber = i + 2 + (state.section or 0) * 2
-    end
-  end
-  -- EOF detection
-  local secondByte = peek(2)
-  local fourthByte = peek(4)
-  if length == 6 and secondByte == EOF_SYSEX_SECOND_BYTE and fourthByte == EOF_SYSEX_FOURTH_BYTE then
-    if state.p_flag then
-      state.msgNumber = 9
-    elseif state.a_flag then
-      state.msgNumber = 3
-    elseif state.g_flag then
-      state.msgNumber = 3
-    end
-  end
-  -- Logging
+end
+
+function log_sysex(msgNumber, iface, length, sysexBlock)
   print(string.format("sysex (msg=%d) message received: interface=%s length=%d",
-    state.msgNumber, iface, length))
-  for startIndex = 1, length, 16 do
+    msgNumber, iface, length))
+  
+  for startIndex = 1, length, 18 do
     local bytes = {}
-    local endIndex = math.min(startIndex + 15, length)
+    local endIndex = math.min(startIndex + 17, length)
     for i = startIndex, endIndex do
-      local b = peek(i) or 0
+      local b = sysexBlock:peek(i) or 0
       bytes[#bytes + 1] = string.format("%02X", b)
     end
     print(string.format("data[%04X]: %s", startIndex - 1, table.concat(bytes, " ")))
   end
-  -- collect each message into dump
+end
+
+function collect_dump(sysexBlock, length)
   local temp = {}
   for i = 1, length do
-    local b = peek(i)
+    local b = sysexBlock:peek(i)
     if not b then break end
     temp[i] = b
   end
-  table.insert(state.dump, temp)
-  -- call the appropriate handler on EOF for each type
-  if state.p_flag and state.msgNumber == 9 then
-    if type(patch) == "function" then pcall(patch, state.dump) else print("onSysex: patch() not available") end
-    -- reset state
-    reset_state_for_iface(iface)
-    return
-  elseif state.a_flag and state.msgNumber == 3 then
-    if type(atrophy) == "function" then pcall(atrophy, state.dump) else print("onSysex: atrophy() not available") end
-    reset_state_for_iface(iface)
-    return
-  elseif state.g_flag and state.msgNumber == 3 then
-    if type(global) == "function" then pcall(global,state.dump) else print("onSysex: global() not available") end
-    reset_state_for_iface(iface)
-    return
-  end
-  -- advance message number for next call
-  if type(state.msgNumber) == "number" then
-    state.msgNumber = state.msgNumber + 1
-  else
-    state.msgNumber = 0
-  end
-end)
+  return temp
+end
 
+function midi.onSysex(midiInput, sysexBlock)
+  local ok, err = pcall(function()
+    local length = sysexBlock:getLength()
+    local iface = tostring(midiInput.interface or midiInput.name or "unknown")
+    local state = sysex_states[iface]
+    
+    if not state then
+      reset_state_for_iface(iface)
+      state = sysex_states[iface]
+    end
+    
+    -- Reset state if starting a new transfer
+    if state.msgNumber == 0 then
+      state.dump = {}
+      state.section = 0
+      state.dumpType = nil
+    end
+    
+    -- HEADER detection
+    if length > 6 and safe_peek(sysexBlock, length, 11) == HEADER_MSG_TYPE then
+      local expected_header_msgnum = 1 + (state.section or 0) * 2
+      
+      if state.msgNumber ~= 0 and state.msgNumber ~= expected_header_msgnum then
+        print("onSysex: unexpected header while msgNumber=" .. tostring(state.msgNumber) .. "; resetting state and starting new transfer")
+        reset_state_for_iface(iface)
+        state = sysex_states[iface]
+      end
+      
+      if state.msgNumber == 0 then
+        -- Start of first header: validate vendor and model
+        state.section = 0
+        state.msgNumber = 1
+        
+        if not is_vendor_match(sysexBlock, length) then
+          print("onSysex: Not Behringer vendor; ignoring message")
+          reset_state_for_iface(iface)
+          return
+        end
+        
+        if safe_peek(sysexBlock, length, 7) ~= MODEL_BYTE then
+          print("onSysex: Not UB-Xa model; ignoring message")
+          reset_state_for_iface(iface)
+          return
+        end
+        
+        -- Detect dump type from header text (only on first header)
+        state.dumpType = detect_dump_type(sysexBlock, length)
+      else
+        -- Additional header: advance section
+        state.section = (state.section or 0) + 1
+        state.msgNumber = 1 + state.section * 2
+        -- dumpType already set by first header, do not reset
+      end
+    end
+    
+    -- PACKET detection: simplified to single peek
+    if length > 6 and safe_peek(sysexBlock, length, 11) == PACKET_MSG_TYPE then
+      local packetNum = safe_peek(sysexBlock, length, 12)
+      if packetNum and packetNum >= 0 and packetNum <= 16 then
+        state.msgNumber = packetNum + 2 + (state.section or 0) * 2
+      end
+    end
+
+    -- Logging
+    log_sysex(state.msgNumber, iface, length, sysexBlock)
+    
+    -- Collect message into dump
+    table.insert(state.dump, collect_dump(sysexBlock, length))
+    
+    -- Call handler on EOF if applicable
+    if state.dumpType then
+      local handlerInfo = HANDLERS[state.dumpType]
+      if handlerInfo and state.msgNumber == handlerInfo.endMsgNum then
+        call_handler(state.dumpType, state.dump)
+        reset_state_for_iface(iface)
+        return
+      end
+    end
+    
+    -- Advance message number for next call
+    state.msgNumber = state.msgNumber + 1
+  end)
+  
   if not ok then
     print("onSysex: pcall failed: " .. tostring(err))
   end
 end
 
--- process a patch dump
-function patch(dump)
+-- process an upper patch dump
+-- need to finish performance/panel settings parameters
+function upperPatch(dump)
   -- parse of the incoming dump
   local result = parse_sysex(dump)
   if not result or type(result.data) ~= "table" then
     print("Could not read data")
     return
   end
-  local param2 = {}  -- store 2 byte parameters
-  local param1 = {}  -- store 1 byte parameters
   local data = result.data
   -- print patch name to screen
   patchName = get_patch_name(data) -- update global patchName
-  info.setText(patchName)
+  info.setText("U "..patchName)
+  local param2 = {}  -- store 2 byte parameters
   local idx = 1
-  for i = 1,77,2 do -- loop through the 2-byte patch parameters - parameter value is located in the 2nd byte of pair
+  for i = 1,77,2 do -- 2-byte parameters - parameter value is located in the 2nd byte of pair
     param2[idx] = data[i+1]
 --    print("patch: 2nd 2-byte parameter " .. idx .. ": " .. data[i+1])
     idx = idx+1
   end
-  local idx = 1
-  for i = 95,155 do -- loop through the 1-byte parameters that start at byte 95 after the patch name bytes.  
-    param1[idx] = data[i]
---    print("patch: 1-byte parameter: ".. idx .. ": " .. data[i])
-    idx = idx + 1
+  
+  -- for parsing analysis
+  for i = 95,155 do 
+--    print("upper patch byte: ".. i .. " value: " .. data[i])
   end
+  for i = 668,685 do 
+    print("upper patch byte: ".. i .. " value: " .. data[i])
+  end
+  
   -- Assign the 39 2-byte parameters. Multiple 0-255 range parameters by 64 to scale to the 0-16383 (14-bit) range of nrpn
   -- The result doesn't match exactly the UB-Xa because the range of a 2-byte parameter is actually 0-65535 (16-bit)
-  -- See manual for description of the nrpn 
-  local paramList = {0,1,2,3,128,256,257,258,259,260,384,385,386,387,388,389,390,391,392,393,394,395,396,512,513,514,515,640,641,642,643,768,770,772,774,769,771,773,775}
+  -- See manual for description of the parameters 
+  local paramList = {0,1,2,3,128,256,257,258,259,260,384,385,386,387,388,389,390,391,392,393,394,395,396,
+                  512,513,514,515,640,641,642,643,768,770,772,774,769,771,773,775}
   for i = 1,39 do
-    parameterMap.set (deviceId, 3, paramList[i], param2[i]*64) 
+    parameterMap.set (deviceId, PT_NRPN, paramList[i], param2[i]*64) 
   end
-  -- Assign the 1-byte parameters to E1 patch parameters. Some are bitmasked and treated separately.
-  local singleParams = {
-    {4, 1},      -- unison mode toggle 
-    {5, 2},      -- poly voice #
-    {6, 3},      -- unison voice #
-    -- { , 4},   -- 4 ?? (skipped)
-    {11, 5},     -- portamento spread
-    {12, 6},     -- portamento range
-    {262, 8},    -- LFO shape
-    {533, 16},   -- Osc FEnv range
-    {518, 18},   -- Osc1 shape
-    -- { , 19}, -- 19 ?? (skipped)
-    {519, 20},   -- Osc2 level
-    {520, 21},   -- Osc2 shape
-    {536, 22},   -- Osc2 quantize
-    {525, 23},   -- Osc1 lfo amount
-    {534, 24},   -- Osc2 lfo amount
-    {526, 25},   -- Osc1 pwm lfo amount
-    {537, 26},   -- Osc2 pwm lfo amount
-    {664, 28},   -- Range of filter tracking
-    {650, 29},   -- Range of filter envelope
-    {647, 30},   -- Range of filter frequency
-    {653, 31},   -- Range of filter LFO
-    {657, 32},   -- Range of filter pedal
-    {776, 33},   -- mod source 1
-    {777, 34},   -- mod dest 1
-    {780, 35},   -- mod source 2
-    {781, 36},   -- mod dest 2
-    {784, 37},   -- mod source 3
-    {785, 38},   -- mod dest 3
-    {788, 39},   -- mod source 4
-    {789, 40},   -- mod dest 4
-    {778, 41},   -- mod source 5
-    {779, 42},   -- mod dest 5
-    {782, 43},   -- mod source 6
-    {783, 44},   -- mod dest 6
-    {786, 45},   -- mod source 7
-    {787, 46},   -- mod dest 7
-    {790, 47},   -- mod source 8
-    {791, 48},   -- mod dest 8
-    {913, 58},   -- Atrophy preference
-    {1152, 59},  -- patch midi transpose
--- (62 is RFU)    
-    {2056, 61},  -- VCA LFO Amount
+  -- Assign remaining patch parameters. Some are bitmasked and treated separately.
+  local mappings = {
+    {4, 95},      -- unison mode toggle 
+    {5, 96},      -- poly voice #
+    {6, 97},      -- unison voice #
+    -- { , 98},   -- 4 ?? (skipped)
+    {11, 99},     -- portamento spread
+    {12, 100},     -- portamento range
+    {262, 102},    -- LFO shape
+    {533, 110},   -- Osc FEnv range
+    {518, 112},   -- Osc1 shape
+    -- { , 113}, -- 19 ?? (skipped)
+    {519, 114},   -- Osc2 level
+    {520, 115},   -- Osc2 shape
+    {536, 116},   -- Osc2 quantize
+    {525, 117},   -- Osc1 lfo amount
+    {534, 118},   -- Osc2 lfo amount
+    {526, 119},   -- Osc1 pwm lfo amount
+    {537, 120},   -- Osc2 pwm lfo amount
+    {664, 122},   -- Range of filter tracking
+    {650, 123},   -- Range of filter envelope
+    {647, 124},   -- Range of filter frequency
+    {653, 125},   -- Range of filter LFO
+    {657, 126},   -- Range of filter pedal
+    {776, 127},   -- mod source 1
+    {777, 128},   -- mod dest 1
+    {780, 129},   -- mod source 2
+    {781, 130},   -- mod dest 2
+    {784, 131},   -- mod source 3
+    {785, 132},   -- mod dest 3
+    {788, 133},   -- mod source 4
+    {789, 134},   -- mod dest 4
+    {778, 135},   -- mod source 5
+    {779, 136},   -- mod dest 5
+    {782, 137},   -- mod source 6
+    {783, 138},   -- mod dest 6
+    {786, 139},   -- mod source 7
+    {787, 140},   -- mod dest 7
+    {790, 141},   -- mod source 8
+    {791, 142},   -- mod dest 8
+    {913, 152},   -- Atrophy preference
+    {1152, 153},  -- patch midi transpose
+-- (154 is RFU)    
+    {2056, 155},  -- VCA LFO Amount
+
+    {1280, 673},  -- Performance keyboard split point
+    {133, 682},  -- Performance LFO shape
+
+    {138, 686}, -- max speed of main mod LFO
+    {267, 687},  -- max speed of performance LFO
+    {521, 689},  -- Osc1 PW left trim
+    {522, 690},  -- Osc1 PW right trim
+    {523, 691},  -- Osc2 PW left trim
+    {524, 692},  -- Osc2 PW right trim
+    {527, 693},  -- PWM offset
+    {528, 694},  -- osc drift
+    {529, 695},  -- osc vol/oct error 
+    {530, 696},  -- osc drift speed
+    {531, 697},  -- osc vol/oct chaos !!WRONG!!!
+    {532, 698},  -- osc initial freq
+    {645, 699},  -- 2-pole resonance trim
+    {646, 700},  -- 4-pole resonance trim
+    {648, 701},  -- 2-pole floor
+    {649, 702},  -- 4-pole floor
+    {665, 703},  -- filter env attack linearity      
+    {666, 704},  -- filter env decay linearity
+    {652, 705},  -- filter env chaos
+    {654, 706},  -- filter drift
+    {655, 707},  -- filter drift speed
+    {656, 708},  -- filter track offset
+    {658, 709},  -- filter v/oct error
+    {659, 710},  -- filter v/oct drift
+    {660, 711},  -- filter initial freq
+    {2049, 712},  -- VCA bias 2p filter
+    {2050, 713},  -- VCA bias unison bias
+    {2051, 714},  -- VCA bias master
+    {2054, 715},  -- VCA attack linearity
+    {2055, 716},  -- VCA decay linearity
+    {2053, 717},  -- VCA env chaos
+    {2176, 718},  -- per voice pan settings - 01
+    {2177, 719},  -- per voice pan settings - 02
+    {2178, 720},  -- per voice pan settings - 03
+    {2179, 721},  -- per voice pan settings - 04
+    {2180, 722},  -- per voice pan settings - 05
+    {2181, 723},  -- per voice pan settings - 06
+    {2182, 724},  -- per voice pan settings - 07
+    {2183, 725},  -- per voice pan settings - 08
+    {2184, 726},  -- per voice pan settings - 09
+    {2185, 727},  -- per voice pan settings - 10
+    {2186, 728},  -- per voice pan settings - 11
+    {2187, 729},  -- per voice pan settings - 12
+    {2188, 730},  -- per voice pan settings - 13
+    {2189, 731},  -- per voice pan settings - 14
+    {2190, 732},  -- per voice pan settings - 15
+    {2191, 733},  -- per voice pan settings - 16
+    {2304, 734},  -- Atrophy profile name character 1
+    {2305, 735},  -- Atrophy profile name character 2
+    {2306, 736},  -- Atrophy profile name character 3
+    {2307, 737},  -- Atrophy profile name character 4
+    {2308, 738},  -- Atrophy profile name character 5
+    {2309, 739},  -- Atrophy profile name character 6
   }
   -- Batch assign parameters
-  for _, pair in ipairs(singleParams) do
-    parameterMap.set(deviceId, 3, pair[1], param1[pair[2]])
+  for _, p in ipairs(mappings) do
+    parameterMap.set(deviceId, PT_NRPN, p[1], data[p[2]])
   end
-  -- Assign multi-parameter (bit masked) groups
+  -- 2 byte performance parameters
+-- to figure out bytes 680, 682, 683, 684, 685. 
+  local mappings = {
+    {131, 679},  -- Performance octave pitch transpose (/64)
+    {132, 681},  -- Performance LFO rate (/64)
+    {134, 683},  -- Performance LFO depth (/64) ??
+  }
+  -- Batch assign parameters
+  for _, p in ipairs(mappings) do
+    parameterMap.set(deviceId, PT_NRPN, p[1], data[p[2]]*64)
+  end
+
+  -- Assign upper patch ARP and sequencer parameters to upper device
+  local mappings = {
+    {1024, 143},  -- ARP enable
+    {1025, 144},  -- ARP mode
+    {1026, 145},  -- ARP hold
+    {1027, 146},  -- ARP time
+    {1028, 147},  -- ARP gate length
+    {1029, 148},  -- ARP sync
+    {1030, 149},  -- ARP octave range
+    {2432, 668},  -- seq # steps
+    {2433, 669},  -- seq time 
+    {2434, 670},  -- seq gate length
+    {2435, 671},  -- seq sync
+  }
+  for _, p in ipairs(mappings) do
+    parameterMap.set(upperDevice:getId(), PT_NRPN, p[1], data[p[2]])
+  end
+
+  -- Assign bit masked groups
   local paramGroups = {
-    {7, {37,38,39,40}},                 -- 261 LFO modulation
-    {9, {50,51,27}},                    -- 263 CH1 LFO destinations
-    {10, {30,31}},                      -- 264 CH1 quant/invert
-    {11, {33,35,44}},                   -- 265 CH2 LFO destinations
-    {12, {49,46}},                      -- 266 CH2 quant/invert
-    {13, {136,137,138,139,140}},        -- 397 Filter env mods
-    {14, {141,142,143,144,145}},        -- 398 VCA env mods
-    {15, {2,9}},                        -- 516 OSC2 modes
-    {17, {3,154,155}},                  -- 517 Osc1 state
-    {27, {76,89}},                      -- 644 Filter key track and mode
+    {101, {37,38,39,40}},                 -- 261 LFO modulation
+    {103, {50,51,27}},                    -- 263 CH1 LFO destinations
+    {104, {30,31}},                      -- 264 CH1 quant/invert
+    {105, {33,35,44}},                   -- 265 CH2 LFO destinations
+    {106, {49,46}},                      -- 266 CH2 quant/invert
+    {107, {136,137,138,139,140}},        -- 397 Filter env mods
+    {108, {141,142,143,144,145}},        -- 398 VCA env mods
+    {109, {2,9}},                        -- 516 OSC2 modes
+    {112, {3,154,155}},                  -- 517 Osc1 state
+    {121, {76,89}},                      -- 644 Filter key track and mode
+
+    {672, {115,117,118,119}},            -- 135 Perfromance LFO mods
+    {674, {8,10,19,97,103,109}},         -- 129 Performance panel settings
+    {688, {52,55}},                     -- OB8 Quirks (bitmasked)
   }
-  for _, group in ipairs(paramGroups) do
-    pset(group[2], param1[group[1]])
+  for _, p in ipairs(paramGroups) do
+    pset(p[2], data[p[1]])
   end
-  print("-- parse of the incoming dump")
-  -- Assign ARP parameters to upperDevice
-  local arpParams = {
-    {1024, 49},  -- ARP enable
-    {1025, 50},  -- ARP mode
-    {1026, 51},  -- ARP hold
-    {1027, 52},  -- ARP time
-    {1028, 53},  -- ARP gate length
-    {1029, 54},  -- ARP sync
-    {1030, 55},  -- ARP octave range
-  }
-  for _, pair in ipairs(arpParams) do
-    parameterMap.set(upperDevice:getId(), 3, pair[1], param1[pair[2]])
-  end
-  -- restore/cleanup original globals
-  p_flag = false
-  dump = {}
-  msgNumber = 0
-  print("patch settings parsed. Number of bytes: ".. #data)
+
+    print("upper patch settings parsed. Number of bytes: ".. #data)
 end
 
+-- for a global atrophy profile dump
 function atrophy(dump)
   -- parse of the incoming dump
   local result = parse_sysex(dump)
@@ -872,10 +1024,9 @@ function atrophy(dump)
     print("Could not read data")
     return
   end
-  local dev = deviceId
   local data = result.data
   for i = 1, #data do
---    print(string.format("atrophy byte #: %d value: %s", i, tostring(data[i])))
+    print(string.format("atrophy byte #: %d value: %s", i, tostring(data[i])))
   end
   -- assign byte values to corresponding E1 atrophy parameter values
   local mappings = {
@@ -934,63 +1085,14 @@ function atrophy(dump)
     {2309, 54},  -- Atrophy profile name character 6
   }
   -- Batch assign parameters
-  for _, pair in ipairs(mappings) do
-    parameterMap.set(dev, 3, pair[1], data[pair[2]])
+  for _, p in ipairs(mappings) do
+    parameterMap.set(deviceId, PT_NRPN, p[1], data[p[2]])
   end
   pset({52,55},data[3])               -- OB8 Quirks (bitmasked)
-  -- restore/cleanup original globals
-  a_flag = false
-  dump = {}
-  msgNumber = 0
   print("atrophy settings parsed. Number of bytes: ".. #data)
 end
 
-function panning(valueObject,value)
-  if value == nil then return end
-  local widthParam = parameterMap.get(deviceId, PT_VIRTUAL, 201)/100
-  local widthControl = controls.get(92)
-  local paramList = {2176,2177,2178,2179,2180,2181,2182,2183,2184,2185,2186,2187,2188,2189,2190,2191}
-  local voice = {}
-  -- hide the width control unless random is selected
-  if value < 3 then 
-    widthControl:setVisible (FALSE)
-  end
-  if value == 0 then 
-    for i = 1,16,1 do
-      parameterMap.set(deviceId, 3, paramList[i], 128)
-    end
-  elseif value == 1 then
-    for i = 1,16,2 do
-      parameterMap.set(deviceId, 3, paramList[i], 0)
-    end
-    for i = 2,16,2 do
-      parameterMap.set(deviceId, 3, paramList[i], 255)
-    end
-  elseif value == 2 then
-    local idx1 = {1,5,9,13}
-    local idx2 = {2,6,10,14}
-    local idx3 = {3,7,11,15}
-    local idx4 = {4,8,12,16}
-    for i = 1,4 do
-      parameterMap.set(deviceId, 3, paramList[idx1[i]], 0)
-    end
-    for i = 1,4 do
-      parameterMap.set(deviceId, 3, paramList[idx2[i]], 64)
-    end
-    for i = 1,4 do
-      parameterMap.set(deviceId, 3, paramList[idx3[i]], 192)
-    end
-    for i = 1,4 do
-      parameterMap.set(deviceId, 3, paramList[idx4[i]], 255)
-    end
-  elseif value == 3 then 
-    widthControl:setVisible (not widthControl:isVisible())
-    for i = 1,16,1 do
-      parameterMap.set(deviceId, 3, paramList[i], 128)
-    end
-  end
-end
-
+-- for a global settings dump
 function global(dump)
   -- parse of the incoming dump
   local result = parse_sysex(dump)
@@ -999,7 +1101,6 @@ function global(dump)
     return
   end
   -- cache globals/functions for speed
-  local dev = deviceId
   local data = result.data
   for i = 1, #data do
 --    print(string.format("global byte #: %d value: %s", i, tostring(data[i])))
@@ -1053,8 +1154,8 @@ function global(dump)
 --    {,61} -- RFU (0-32), {1793, 62}, -- Display contrast, {1794, 63}, -- Lever settings, {1795, 64}, -- Fan, {1920, 65}, -- Background calibration settings
   }
   -- Batch assign nrpn parameters
-  for _, pair in ipairs(mappings) do
-    parameterMap.set(dev, 3, pair[1], data[pair[2]])
+  for _, p in ipairs(mappings) do
+    parameterMap.set(deviceId, PT_NRPN, p[1], data[p[2]])
   end
 -- MIDI channel settings done separately in case want to be read only
 local mappings = {
@@ -1063,14 +1164,79 @@ local mappings = {
     {1159, 22}, -- upper midi tx channel
     {1160, 23}, -- lower midi tx channel 
 }
-  -- Batch assign MIDI channel parameters (change between virtual (0) and nrpn (3) as desired )
-  for _, pair in ipairs(mappings) do
-    parameterMap.set(dev, 3, pair[1], data[pair[2]])
+  -- Batch assign MIDI channel parameters (read only )
+  for _, p in ipairs(mappings) do
+    parameterMap.set(deviceId, PT_VIRTUAL, p[1], data[p[2]])
   end
-
-  -- restore/cleanup original globals
-  g_flag = false
-  dump = {}
-  msgNumber = 0
+  upperChannel   = parameterMap.get(deviceId, PT_VIRTUAL, 1159) + 1 
+  lowerChannel   = parameterMap.get(deviceId, PT_VIRTUAL, 1160) + 1
+  currentChannel = upperChannel
+  print("current midi channel is " ..currentChannel )
   print("global settings parsed. Number of bytes: ".. #data)
 end
+
+-- process a split double dump
+-- not completed
+function splitDouble(dump)
+  -- parse of the incoming dump
+  local result = parse_sysex(dump)
+  if not result or type(result.data) ~= "table" then
+    print("Could not read data")
+    return
+  end
+  local data = result.data
+  for i = 1,#data do 
+    print("split double: byte values: ".. i .. ": " .. data[i])
+  end
+  print("split double settings parsed. Number of bytes: ".. #data)
+end
+
+-- process a current program dump
+-- not completed
+function currentProgram(dump)
+  -- parse of the incoming dump
+  local result = parse_sysex(dump)
+  if not result or type(result.data) ~= "table" then
+    print("Could not read data")
+    return
+  end
+  local data = result.data
+  for i = 1,#data do 
+    print("current program: byte values: ".. i .. ": " .. data[i])
+  end
+  print("current program settings parsed. Number of bytes: ".. #data)
+end
+
+-- for a lower patch dump
+-- not completed
+function lowerPatch(dump)
+  -- parse of the incoming dump
+  local result = parse_sysex(dump)
+  if not result or type(result.data) ~= "table" then
+    print("Could not read data")
+    return
+  end
+  local data = result.data
+  -- print patch name to screen
+  patchName = get_patch_name(data) -- update global patchName
+  info.setText("L "..patchName)
+  for i = 1,#data do 
+    print("lower patch: byte values: ".. i .. ": " .. data[i])
+  end
+  print("lower patch parsed. Number of bytes: ".. #data)
+end
+
+-- for a lower patch dump
+-- not completed
+function patchNames(dump)
+  -- parse of the incoming dump
+  local result = parse_sysex(dump)
+  if not result or type(result.data) ~= "table" then
+    print("Could not read data")
+    return
+  end
+  local data = result.data
+
+  print("patch names parsed. Number of bytes: ".. #data)
+end
+
