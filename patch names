@@ -6,14 +6,24 @@
   end
   local data = result.data
   local pNames = {}
-  local idx = 1
-  for i = 1,8192,16 do
-    pNames[idx] = get_patch_name(data,i) -- update patchName
-    idx = idx+1
+
+  -- Option B: treat the flat array as 4 banks of 128 each and map them so
+  -- pNames[row][col] = flat[(col-1)*128 + row]
+  -- This produces 128 rows with 4 columns where each column is one of the original 4 banks.
+  for row = 1,128 do
+    pNames[row] = {}
+    for col = 1,4 do
+      local flatIndex = (col - 1) * 128 + row            -- 1..512
+      local byteOffset = (flatIndex - 1) * 16 + 1        -- original stepping by 16 bytes
+      pNames[row][col] = get_patch_name(data, byteOffset)
+    end
   end
+
+  -- debug print (optional)
   for i = 1,#pNames do
-    print("patch name "..i.." "..pNames[i])
+    print("patch row "..i.." : "..table.concat(pNames[i], " | "))
   end
+
   print("patch names parsed. Number of bytes: ".. #data)
   return (pNames)
 end
