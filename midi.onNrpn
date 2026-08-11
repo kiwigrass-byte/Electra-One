@@ -82,7 +82,32 @@ function midi.onNrpn(callback)
       return
     end
 
-    midi.onControlChange(handle_cc)
+    -- The midi.onControlChange callback may have two possible signatures depending on the
+    -- Electra One firmware version / API docs:
+    -- 1) legacy: function(channel, controller, value)
+    -- 2) documented: function(midiInput, channel, controllerNumber, value)
+    -- To support both, wrap handle_cc in a compatibility shim that adapts the arguments.
+    local function cc_wrapper(...)
+      local a1, a2, a3, a4 = ...
+      local channel, controller, value
+      if type(a1) == "table" then
+        -- documented signature: midiInput, channel, controllerNumber, value
+        channel = a2
+        controller = a3
+        value = a4
+      else
+        -- legacy signature: channel, controller, value
+        channel = a1
+        controller = a2
+        value = a3
+      end
+      -- only call if we have the required numeric args
+      if type(channel) == "number" and type(controller) == "number" and type(value) == "number" then
+        handle_cc(channel, controller, value)
+      end
+    end
+
+    midi.onControlChange(cc_wrapper)
     registered = true
   end
 end
