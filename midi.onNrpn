@@ -1,5 +1,5 @@
 -- electra_nrpn.lua
--- NRPN helper for Electra One Lua API
+-- NRPN helper for Electra One Lua API (simplified: no RPN protection)
 -- Adds midi.onNrpn(callback) by listening to midi.onControlChange
 -- Callback signature: callback(channel, nrpnParam, value, info)
 -- nrpnParam = 0..16383 (msb*128 + lsb)
@@ -12,7 +12,7 @@ local nrpn_callback = nil
 local registered = false
 
 local function handle_cc(channel, controller, value)
-  local s = nrpn_state[channel] or { nrpn_msb = nil, nrpn_lsb = nil, data_msb = nil, data_lsb = nil, rpn_msb = 127, rpn_lsb = 127 }
+  local s = nrpn_state[channel] or { nrpn_msb = nil, nrpn_lsb = nil, data_msb = nil, data_lsb = nil }
 
   -- NRPN parameter select
   if controller == 99 then -- NRPN MSB
@@ -32,17 +32,9 @@ local function handle_cc(channel, controller, value)
       s.data_msb = nil; s.data_lsb = nil
     end
 
-  -- RPN parameter select (track so we don't confuse RPN with NRPN)
-  elseif controller == 101 then -- RPN MSB
-    s.rpn_msb = value
-    -- if RPN null (127/127) then it's deselected
-  elseif controller == 100 then -- RPN LSB
-    s.rpn_lsb = value
-
   -- Data Entry MSB (CC 6)
   elseif controller == 6 then
-    local rpn_selected = (s.rpn_msb ~= 127) or (s.rpn_lsb ~= 127)
-    if s.nrpn_msb and s.nrpn_lsb and (not rpn_selected) then
+    if s.nrpn_msb and s.nrpn_lsb then
       s.data_msb = value
       local param = s.nrpn_msb * 128 + s.nrpn_lsb
       local combined = value
@@ -56,8 +48,7 @@ local function handle_cc(channel, controller, value)
 
   -- Data Entry LSB (CC 38)
   elseif controller == 38 then
-    local rpn_selected = (s.rpn_msb ~= 127) or (s.rpn_lsb ~= 127)
-    if s.nrpn_msb and s.nrpn_lsb and (not rpn_selected) then
+    if s.nrpn_msb and s.nrpn_lsb then
       s.data_lsb = value
       local param = s.nrpn_msb * 128 + s.nrpn_lsb
       local combined = ((s.data_msb or 0) * 128) + s.data_lsb
@@ -91,5 +82,5 @@ end
 
 -- Example usage (uncomment to use):
 -- midi.onNrpn(function(channel, nrpn, value, info)
--- print(string.format("CH%d NRPN %d -> %d (%s)", channel, nrpn, value, info.type))
+--   print(string.format("CH%d NRPN %d -> %d (%s)", channel, nrpn, value, info.type))
 -- end)
