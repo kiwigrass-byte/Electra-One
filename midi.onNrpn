@@ -75,6 +75,13 @@ end
 function midi.onNrpn(callback)
   nrpn_callback = callback
   if not registered then
+    -- Defensive check: make sure the midi API and onControlChange exist before calling it.
+    if not midi or type(midi.onControlChange) ~= "function" then
+      -- Fail gracefully instead of attempting to call a nil function.
+      print("electra_nrpn: midi.onControlChange not available in this environment - handler not registered")
+      return
+    end
+
     midi.onControlChange(handle_cc)
     registered = true
   end
