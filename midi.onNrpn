@@ -1,0 +1,95 @@
+-- electra_nrpn.lua
+-- NRPN helper for Electra One Lua API
+-- Adds midi.onNrpn(callback) by listening to midi.onControlChange
+-- Callback signature: callback(channel, nrpnParam, value, info)
+-- nrpnParam = 0..16383 (msb*128 + lsb)
+-- value = combined 14-bit value if LSB available, otherwise 7-bit MSB value (or amount for inc/dec)
+-- info.type = "data_entry_msb" | "data_entry_lsb" | "inc" | "dec"
+-- info.msb / info.lsb included when applicable
+
+local nrpn_state = {}
+local nrpn_callback = nil
+local registered = false
+
+local function handle_cc(channel, controller, value)
+  local s = nrpn_state[channel] or { nrpn_msb = nil, nrpn_lsb = nil, data_msb = nil, data_lsb = nil, rpn_msb = 127, rpn_lsb = 127 }
+
+  -- NRPN parameter select
+  if controller == 99 then -- NRPN MSB
+    if value == 127 then
+      -- deselect NRPN
+      s.nrpn_msb = nil; s.nrpn_lsb = nil; s.data_msb = nil; s.data_lsb = nil
+    else
+      s.nrpn_msb = value
+      s.data_msb = nil; s.data_lsb = nil
+    end
+
+  elseif controller == 98 then -- NRPN LSB
+    if value == 127 then
+      s.nrpn_msb = nil; s.nrpn_lsb = nil; s.data_msb = nil; s.data_lsb = nil
+    else
+      s.nrpn_lsb = value
+      s.data_msb = nil; s.data_lsb = nil
+    end
+
+  -- RPN parameter select (track so we don't confuse RPN with NRPN)
+  elseif controller == 101 then -- RPN MSB
+    s.rpn_msb = value
+    -- if RPN null (127/127) then it's deselected
+  elseif controller == 100 then -- RPN LSB
+    s.rpn_lsb = value
+
+  -- Data Entry MSB (CC 6)
+  elseif controller == 6 then
+    local rpn_selected = (s.rpn_msb ~= 127) or (s.rpn_lsb ~= 127)
+    if s.nrpn_msb and s.nrpn_lsb and (not rpn_selected) then
+      s.data_msb = value
+      local param = s.nrpn_msb * 128 + s.nrpn_lsb
+      local combined = value
+      if s.data_lsb then
+        combined = (s.data_msb * 128) + s.data_lsb
+      end
+      if nrpn_callback then
+        nrpn_callback(channel, param, combined, { type = "data_entry_msb", msb = value, lsb = s.data_lsb })
+      end
+    end
+
+  -- Data Entry LSB (CC 38)
+  elseif controller == 38 then
+    local rpn_selected = (s.rpn_msb ~= 127) or (s.rpn_lsb ~= 127)
+    if s.nrpn_msb and s.nrpn_lsb and (not rpn_selected) then
+      s.data_lsb = value
+      local param = s.nrpn_msb * 128 + s.nrpn_lsb
+      local combined = ((s.data_msb or 0) * 128) + s.data_lsb
+      if nrpn_callback then
+        nrpn_callback(channel, param, combined, { type = "data_entry_lsb", msb = s.data_msb, lsb = value })
+      end
+    end
+
+  -- Data Increment (96) / Decrement (97)
+  elseif controller == 96 or controller == 97 then
+    if s.nrpn_msb and s.nrpn_lsb then
+      local param = s.nrpn_msb * 128 + s.nrpn_lsb
+      local kind = controller == 96 and "inc" or "dec"
+      if nrpn_callback then
+        nrpn_callback(channel, param, value, { type = kind, amount = value })
+      end
+    end
+  end
+
+  nrpn_state[channel] = s
+end
+
+-- Public API: register a single NRPN callback. Calling multiple times replaces the previous callback.
+function midi.onNrpn(callback)
+  nrpn_callback = callback
+  if not registered then
+    midi.onControlChange(handle_cc)
+    registered = true
+  end
+end
+
+-- Example usage (uncomment to use):
+-- midi.onNrpn(function(channel, nrpn, value, info)
+-- print(string.format("CH%d NRPN %d -> %d (%s)", channel, nrpn, value, info.type))
+-- end)
