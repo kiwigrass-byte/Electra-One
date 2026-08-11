@@ -1,0 +1,14 @@
+-- helper function to parse an x bit bitmask to a virtual parameter with values 0..2^x-1
+--parameterMap.set(deviceId, type, parameterNumber, midiValue)
+function pset(params, value)
+  local x = #params
+  -- coerce to integer and keep only the lowest x bits (values: 0..2^x-1)
+  local v = math.floor(tonumber(value) or 0) & (2^x - 1)
+  if v == 0 then return end
+  -- set parameters according to bits of v (LSB -> p1)
+  for i, p in ipairs(params) do
+    if p ~= nil and ((v >> (i - 1)) & 1) ~= 0 then
+      parameterMap.set(deviceId, PT_VIRTUAL, p, 1)
+    end
+  end
+end
